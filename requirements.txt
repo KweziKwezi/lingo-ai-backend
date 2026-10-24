@@ -1,12 +1,13 @@
-   fastapi
-   uvicorn
-   python-multipart
-   passlib[bcrypt]
-   python-jose[cryptography]
-   python-dotenv
-   langchain-openai
-   langchain-chroma
-   langchain-community
-   pypdf
-   python-pptx
-   email-validator
+fastapi
+uvicorn
+python-multipart
+passlib
+bcrypt==4.0.1
+python-jose[cryptography]
+python-dotenv
+langchain-openai
+langchain-chroma
+langchain-community
+pypdf
+python-pptx
+email-validator
