@@ -31,14 +31,18 @@ app = FastAPI(
 )
 
 # Allow mobile apps and websites to talk to this API
+from fastapi.middleware.cors import CORSMiddleware
+
+# ... (your other imports and app = FastAPI(...) code) ...
+
+# ADD THIS EXACT BLOCK:
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=["*"],          # Allows your Vercel app, localhost, etc.
+    allow_credentials=False,      # MUST be False when allow_origins is "*"
+    allow_methods=["*"],          # Allows GET, POST, PUT, DELETE, etc.
+    allow_headers=["*"],          # Allows all headers (including Authorization)
 )
-
 # ==========================================
 # REQUEST/RESPONSE MODELS
 # ==========================================
