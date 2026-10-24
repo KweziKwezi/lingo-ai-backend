@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🇿🇦 SA Study AI Tutor</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background-color: #f5f7fa; color: #333; }
+        .header { text-align: center; margin-bottom: 30px; }
+        .header h1 { color: #007bff; }
+        .card { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        select, input, textarea { width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid #ddd; border-radius: 5px; font-size: 16px; box-sizing: border-box; }
+        button { background-color: #007bff; color: white; border: none; padding: 12px 20px; border-radius: 5px; cursor: pointer; font-size: 16px; width: 100%; }
+        button:hover { background-color: #0056b3; }
+        button:disabled { background-color: #ccc; cursor: not-allowed; }
+        .response { background-color: #e8f4fd; padding: 15px; border-radius: 5px; border-left: 4px solid #007bff; white-space: pre-wrap; line-height: 1.6; }
+        .loading { text-align: center; color: #666; display: none; }
+        .source { font-size: 12px; color: #666; margin-top: 10px; font-style: italic; }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <h1>🇿🇦 SA Study AI Tutor</h1>
+        <p>Ask questions in your home language. Get answers from your textbooks.</p>
+    </div>
+
+    <div class="card">
+        <h3>📚 1. Select Your Textbook</h3>
+        <label for="bookSelect">Textbook:</label>
+        <select id="bookSelect">
+            <option value="">-- Loading books... --</option>
+        </select>
+
+        <label for="language">Your Language:</label>
+        <select id="language">
+            <option value="English">English</option>
+            <option value="isiZulu" selected>isiZulu</option>
+            <option value="isiXhosa">isiXhosa</option>
+            <option value="Afrikaans">Afrikaans</option>
+            <option value="Sesotho">Sesotho</option>
+            <option value="Setswana">Setswana</option>
+        </select>
+    </div>
+
+    <div class="card">
+        <h3>💬 2. Ask a Question</h3>
+        <label for="question">Your Question:</label>
+        <textarea id="question" rows="3" placeholder="e.g., Ngubani owafumanisa umthetho wokuqala wentshukumo?"></textarea>
+        
+        <button id="askBtn" onclick="askQuestion()">Ask the AI Tutor</button>
+        
+        <div id="loading" class="loading">🧠 AI is thinking and translating...</div>
+        
+        <div id="result" class="card" style="display: none; margin-top: 20px;">
+            <h4>Answer:</h4>
+            <div id="answerText" class="response"></div>
+            <div id="sourceText" class="source"></div</div>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = "http://localhost:8000";
+
+        // Load books on page load
+        async function loadBooks() {
+            try {
+                const response = await fetch(`${API_URL}/books`);
+                const books = await response.json();
+                const select = document.getElementById('bookSelect');
+                select.innerHTML = '<option value="">-- Any Book (General Knowledge) --</option>';
+                
+                books.forEach(book => {
+                    const option = document.createElement('option');
+                    option.value = book.id;
+                    option.textContent = `${book.grade} ${book.subject} (${book.title})`;
+                    select.appendChild(option);
+                });
+            } catch (error) {
+                console.error("Error loading books:", error);
+                document.getElementById('bookSelect').innerHTML = '<option value="">Error loading books. Is the server running?</option>';
+            }
+        }
+
+        async function askQuestion() {
+            const question = document.getElementById('question').value;
+            const language = document.getElementById('language').value;
+            const bookId = document.getElementById('bookSelect').value;
+
+            if (!question) {
+                alert("Please enter a question!");
+                return;
+            }
+
+            // Show loading, hide previous result
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('result').style.display = 'none';
+            document.getElementById('askBtn').disabled = true;
+
+            const payload = {
+                question: question,
+                language: language,
+                book_id: bookId ? parseInt(bookId) : null
+            };
+
+            try {
+                const response = await fetch(`${API_URL}/ask`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    document.getElementById('answerText').textContent = data.answer;
+                    document.getElementById('sourceText').textContent = `Source: ${data.source}`;
+                    document.getElementById('result').style.display = 'block';
+                } else {
+                    alert("Error: " + data.detail);
+                }
+            } catch (error) {
+                alert("Failed to connect to the server. Make sure 'python main.py' is running.");
+            } finally {
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('askBtn').disabled = false;
+            }
+        }
+
+        // Initialize
+        loadBooks();
+    </script>
+</body>
+</html>
