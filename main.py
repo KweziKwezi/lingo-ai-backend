@@ -1,18 +1,19 @@
 import os
 import shutil
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, status
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPBearer
-from pydantic import BaseModel, EmailStr
-from typing import Optional, List
-from dotenv import load_dotenv
 import json
 import re
-from langchain_chroma import Chroma
-from langchain_openai import OpenAIEmbeddings
+from typing import Optional, List
 
-from pydantic import BaseModel
-from langchain_openai import ChatOpenAI
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, status
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, EmailStr
+from dotenv import load_dotenv
+
+# LangChain imports for Quiz generation
+from langchain_chroma import Chroma
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+
+# Local imports
 from hybrid_tutor import hybrid_tutor
 from ingest_textbook import ingest_textbook
 from database import (
@@ -36,12 +37,9 @@ app = FastAPI(
     version="3.0.0"
 )
 
-# Allow mobile apps and websites to talk to this API
-from fastapi.middleware.cors import CORSMiddleware
-
-# ... (your other imports and app = FastAPI(...) code) ...
-
-# ADD THIS EXACT BLOCK:
+# ==========================================
+# CORS MIDDLEWARE
+# ==========================================
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],          # Allows your Vercel app, localhost, etc.
@@ -49,10 +47,10 @@ app.add_middleware(
     allow_methods=["*"],          # Allows GET, POST, PUT, DELETE, etc.
     allow_headers=["*"],          # Allows all headers (including Authorization)
 )
+
 # ==========================================
 # REQUEST/RESPONSE MODELS
 # ==========================================
-
 class UserRegister(BaseModel):
     email: EmailStr
     password: str
@@ -91,10 +89,32 @@ class BookResponse(BaseModel):
     type: str
     uploaded_at: str
 
+# Quiz Models
+class QuizGenerateRequest(BaseModel):
+    book_id: int
+    num_questions: int = 5
+
+class QuizGradeRequest(BaseModel):
+    questions: list
+    user_answers: list
+
+# ==========================================
+# HELPER FUNCTIONS
+# ==========================================
+def extract_json_from_llm(text: str):
+    # Remove markdown code blocks if the LLM adds them
+    text = re.sub(r'^```json\s*', '', text)
+    text = re.sub(r'\s*```$', '', text)
+    # Find the first [ and last ]
+    start = text.find('[')
+    end = text.rfind(']')
+    if start != -1 and end != -1:
+        return json.loads(text[start:end+1])
+    return json.loads(text)
+
 # ==========================================
 # BASIC ENDPOINTS
 # ==========================================
-
 @app.get("/")
 def home():
     return {
@@ -114,92 +134,47 @@ def health_check():
 # ==========================================
 # AUTHENTICATION ENDPOINTS
 # ==========================================
-
 @app.post("/register", response_model=UserResponse)
 def register(user: UserRegister):
-    """Register a new user."""
-    # Check if user already exists
     existing_user = get_user_by_email(user.email)
     if existing_user:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already registered"
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered")
     
-    # Hash the password
     password_hash = get_password_hash(user.password)
-    
-    # Create the user
-    user_id = create_user(
-        email=user.email,
-        password_hash=password_hash,
-        name=user.name
-    )
+    user_id = create_user(email=user.email, password_hash=password_hash, name=user.name)
     
     if not user_id:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to create user"
-        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create user")
     
-    return {
-        "id": user_id,
-        "email": user.email,
-        "name": user.name
-    }
+    return {"id": user_id, "email": user.email, "name": user.name}
 
 @app.post("/login", response_model=Token)
 def login(user: UserLogin):
-    """Login and get an access token."""
-    # Get the user
     db_user = get_user_by_email(user.email)
     if not db_user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password"
-        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect email or password")
     
-    # Verify the password
     if not verify_password(user.password, db_user["password_hash"]):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password"
-        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect email or password")
     
-    # Create access token
     access_token = create_access_token(data={"sub": str(db_user["id"])})
-    
-    return {
-        "access_token": access_token,
-        "token_type": "bearer"
-    }
+    return {"access_token": access_token, "token_type": "bearer"}
 
 @app.get("/me", response_model=UserResponse)
 def get_me(current_user: dict = Depends(get_current_user)):
-    """Get current user info."""
-    return {
-        "id": current_user["id"],
-        "email": current_user["email"],
-        "name": current_user["name"]
-    }
+    return {"id": current_user["id"], "email": current_user["email"], "name": current_user["name"]}
 
 # ==========================================
 # LIBRARY ENDPOINTS (Authenticated)
 # ==========================================
-
 @app.get("/books", response_model=List[BookResponse])
-def list_books(
-    my_books_only: bool = False,
-    current_user: dict = Depends(get_current_user)
-):
-    """List books. If my_books_only=True, only show user's own books."""
+def list_books(my_books_only: bool = False, current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"] if my_books_only else None
     books = get_all_books(user_id=user_id)
     return books
 
 @app.get("/books/{book_id}", response_model=BookResponse)
 def get_book(book_id: int, current_user: dict = Depends(get_current_user)):
-    """Get details of a specific book."""
     book = get_book_by_id(book_id)
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
@@ -207,7 +182,6 @@ def get_book(book_id: int, current_user: dict = Depends(get_current_user)):
 
 @app.delete("/books/{book_id}")
 def remove_book(book_id: int, current_user: dict = Depends(get_current_user)):
-    """Remove a book from the library (only if owned by user)."""
     user_id = current_user["id"]
     success = delete_book(book_id, user_id)
     if not success:
@@ -217,7 +191,6 @@ def remove_book(book_id: int, current_user: dict = Depends(get_current_user)):
 # ==========================================
 # UPLOAD ENDPOINT (Authenticated)
 # ==========================================
-
 @app.post("/upload")
 async def upload_textbook(
     file: UploadFile = File(...),
@@ -227,22 +200,17 @@ async def upload_textbook(
     type: str = Form(default="textbook"),
     current_user: dict = Depends(get_current_user)
 ):
-    """Upload a new textbook or slide deck (authenticated users only)."""
-    # Validate file type
     if not (file.filename.endswith(".pdf") or file.filename.endswith(".pptx")):
         raise HTTPException(status_code=400, detail="Only PDF and PPTX files are allowed")
 
-    # Validate type
     if type not in ["textbook", "slides", "notes"]:
         raise HTTPException(status_code=400, detail="Type must be 'textbook', 'slides', or 'notes'")
 
-    # Save the uploaded file
     file_path = os.path.join("uploads", file.filename)
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
     try:
-        # Ingest the file
         print(f"\n🚀 Starting ingestion for: {title}...")
         book_id = ingest_textbook(
             file_path=file_path,
@@ -252,25 +220,17 @@ async def upload_textbook(
             user_id=current_user["id"],
             type=type
         )
-        
-        return {
-            "message": "File successfully uploaded and added to the library!",
-            "book_id": book_id,
-            "title": title,
-            "type": type
-        }
-        
+        return {"message": "File successfully uploaded and added to the library!", "book_id": book_id, "title": title, "type": type}
     except Exception as e:
-        os.remove(file_path)
+        if os.path.exists(file_path):
+            os.remove(file_path)
         raise HTTPException(status_code=500, detail=f"Failed to process file: {str(e)}")
 
 # ==========================================
 # ASK THE TUTOR ENDPOINT (Authenticated)
 # ==========================================
-
 @app.post("/ask", response_model=QuestionResponse)
 def ask_question(request: QuestionRequest, current_user: dict = Depends(get_current_user)):
-    """Ask the AI tutor a question (authenticated users only)."""
     try:
         print(f"\n📩 New question from user {current_user['email']}:")
         print(f"   Question: {request.question}")
@@ -283,116 +243,37 @@ def ask_question(request: QuestionRequest, current_user: dict = Depends(get_curr
             book_id=request.book_id,
             chapter=request.chapter
         )
-        
-        return QuestionResponse(
-            answer=answer,
-            source=source
-        )
+        return QuestionResponse(answer=answer, source=source)
     except Exception as e:
         print(f"❌ Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-# --- Quiz & Flashcard Models ---
-class StudyMaterialRequest(BaseModel):
-    topic: str = ""
-    language: str = "English"
-    book_id: int = None
-    type: str = "quiz"  # "quiz" or "flashcard"
-    num_items: int = 5
-
-@app.post("/generate-study-material")
-def generate_study_material(req: StudyMaterialRequest, current_user: dict = Depends(get_current_user)):
-    # 1. Get Context from ChromaDB (similar to /ask endpoint)
-    context = ""
-    if req.book_id:
-        # Find the book in DB to get its Chroma collection name/path
-        # (Assuming you have a db helper like get_book_by_id)
-        book = db.get_book(req.book_id) 
-        if book:
-            # Load the vector store for this book
-            vectorstore = Chroma(persist_directory=f"chroma_db/{book['id']}", embedding_function=embeddings)
-            retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
-            docs = retriever.get_relevant_documents(req.topic if req.topic else "main concepts")
-            context = "\n\n".join([doc.page_content for doc in docs])
-
-    # 2. Setup the LLM
-    llm = ChatOpenAI(temperature=0.7, model="gpt-3.5-turbo")
-
-    # 3. Create the Prompt
-    if req.type == "quiz":
-        prompt = f"""You are an expert teacher. Generate {req.num_items} multiple-choice questions about "{req.topic}" based on the context below. 
-        Translate everything into {req.language}.
-        
-        Context: {context}
-        
-        Output ONLY a valid JSON array of objects. Each object must have:
-        - "question": string
-        - "options": array of 4 strings
-        - "correct_answer": integer (0, 1, 2, or 3 representing the index of the correct option)
-        - "explanation": string
-        
-        Do NOT wrap the output in ```json ... ``` markdown blocks. Just output the raw JSON array."""
-    else: # flashcard
-        prompt = f"""You are an expert teacher. Generate {req.num_items} flashcards about "{req.topic}" based on the context below.
-        Translate everything into {req.language}.
-        
-        Context: {context}
-        
-        Output ONLY a valid JSON array of objects. Each object must have:
-        - "term": string
-        - "definition": string
-        
-        Do NOT wrap the output in ```json ... ``` markdown blocks. Just output the raw JSON array."""
-
-    # 4. Call OpenAI
-    response = llm.invoke(prompt)
-    raw_text = response.content
-
-    # 5. Clean and Parse JSON (LLMs sometimes add markdown blocks anyway)
-    raw_text = re.sub(r'^```json\s*', '', raw_text)
-    raw_text = re.sub(r'\s*```$', '', raw_text)
-    
-    try:
-        parsed_data = json.loads(raw_text)
-        return {"data": parsed_data, "type": req.type}
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=500, detail="AI failed to generate valid JSON. Please try again.")
-
-# --- Quiz Models ---
-class QuizGenerateRequest(BaseModel):
-    book_id: int
-    num_questions: int = 5
-
-class QuizGradeRequest(BaseModel):
-    questions: list  # The original generated questions
-    user_answers: list # The student's answers
-
-# --- Helper to extract JSON from LLM ---
-def extract_json_from_llm(text):
-    # Remove markdown code blocks if the LLM adds them
-    text = re.sub(r'^```json\s*', '', text)
-    text = re.sub(r'\s*```$', '', text)
-    # Find the first [ and last ]
-    start = text.find('[')
-    end = text.rfind(']')
-    if start != -1 and end != -1:
-        return json.loads(text[start:end+1])
-    return json.loads(text)
 
 # ==========================================
 # QUIZ & FLASHCARD ENDPOINTS (Authenticated)
 # ==========================================
-
 @app.post("/generate-quiz")
 def generate_quiz(req: QuizGenerateRequest, current_user: dict = Depends(get_current_user)):
     try:
+        print(f"🔍 [QUIZ] Attempting to generate quiz for book_id: {req.book_id}")
+        
         # 1. Get the book using your existing database function
         book = get_book_by_id(req.book_id)
         if not book:
+            print(f"❌ [QUIZ] Book not found for id: {req.book_id}")
             raise HTTPException(status_code=404, detail="Book not found")
         
-        # 2. Extract book ID (handles both dict and object returns safely)
-        b_id = book["id"] if isinstance(book, dict) else book.id
-        
+        # 2. Extract book ID safely (handles both dict and object returns)
+        if isinstance(book, dict):
+            b_id = book.get("id")
+        else:
+            b_id = getattr(book, "id", None)
+            
+        if not b_id:
+            print(f"❌ [QUIZ] Could not determine book ID from: {book}")
+            raise HTTPException(status_code=500, detail="Could not determine book ID")
+            
+        print(f"✅ [QUIZ] Found book ID: {b_id}. Loading Chroma DB...")
+
         # 3. Load the vector store for this specific book
         embeddings = OpenAIEmbeddings()
         vectorstore = Chroma(persist_directory=f"./chroma_db/{b_id}", embedding_function=embeddings)
@@ -401,8 +282,10 @@ def generate_quiz(req: QuizGenerateRequest, current_user: dict = Depends(get_cur
         retriever = vectorstore.as_retriever(search_kwargs={"k": 6})
         docs = retriever.invoke("main concepts and details")
         context = "\n\n".join([doc.page_content for doc in docs])
+        print(f"✅ [QUIZ] Retrieved {len(docs)} chunks of context.")
 
         # 4. Setup LLM
+        print(f"🤖 [QUIZ] Calling OpenAI to generate {req.num_questions} questions...")
         llm = ChatOpenAI(temperature=0.5, model="gpt-3.5-turbo")
 
         # 5. Prompt for Mixed Questions
@@ -423,15 +306,23 @@ def generate_quiz(req: QuizGenerateRequest, current_user: dict = Depends(get_cur
         Do NOT wrap the output in ```json ... ``` markdown blocks. Just output the raw JSON array."""
 
         response = llm.invoke(prompt)
+        print("✅ [QUIZ] OpenAI responded. Parsing JSON...")
         
         # 6. Clean and parse JSON
         parsed_data = extract_json_from_llm(response.content)
+        print("✅ [QUIZ] Quiz generated successfully!")
         return {"questions": parsed_data}
         
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as e:
+        print(f"❌ [QUIZ] JSON Decode Error: {e}")
         raise HTTPException(status_code=500, detail="AI failed to generate valid JSON format.")
+    except HTTPException:
+        raise # Re-raise HTTP exceptions as-is
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"❌ [QUIZ] CRITICAL ERROR: {str(e)}")
+        import traceback
+        traceback.print_exc() # This will print the full red traceback to Render logs!
+        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
 
 
 @app.post("/grade-quiz")
