@@ -2,6 +2,7 @@ import os
 import shutil
 import json
 import re
+import sqlite3
 from typing import Optional, List
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, status
@@ -16,8 +17,6 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 # Local imports
 from hybrid_tutor import hybrid_tutor
 from ingest_textbook import ingest_textbook
-import sqlite3
-
 from database import (
     get_all_books, get_book_by_id, delete_book,
     create_user, get_user_by_email, get_user_by_id
@@ -29,7 +28,7 @@ from auth import (
 
 load_dotenv()
 
-# Ensure new tables exist (Bypassing database.py)
+# Ensure new tables exist (Bypassing database.py cache bug)
 def ensure_new_tables():
     conn = sqlite3.connect("sa_study_app.db")
     cursor = conn.cursor()
@@ -344,7 +343,7 @@ def generate_quiz(req: QuizGenerateRequest, current_user: dict = Depends(get_cur
         print(f"🤖 [QUIZ] Calling OpenAI to generate {req.num_questions} UNIQUE questions...")
         llm = ChatOpenAI(temperature=0.7, model="gpt-4o-mini")
 
-               prompt = f"""You are an expert teacher. Based ONLY on the context below, generate {req.num_questions} questions.
+        prompt = f"""You are an expert teacher. Based ONLY on the context below, generate {req.num_questions} questions.
         
         CRITICAL INSTRUCTION: These questions MUST BE UNIQUE and varied. Do not repeat the same questions. Focus on different facts, definitions, and concepts from the text each time.
         The questions MUST be a mix of these three types: "mcq", "short", and "long".
@@ -361,6 +360,7 @@ def generate_quiz(req: QuizGenerateRequest, current_user: dict = Depends(get_cur
         - "marks": integer (1 for mcq/short, 3 for long)
 
         CRITICAL: Output ONLY the raw JSON array. Do NOT use markdown formatting (no ```json). Do NOT add any text, explanations, or greetings before or after the array."""
+
         response = llm.invoke(prompt)
         print("✅ [QUIZ] OpenAI responded. Parsing JSON...")
         
@@ -446,21 +446,17 @@ def grade_quiz(req: QuizGradeRequest, current_user: dict = Depends(get_current_u
 # ==========================================
 @app.post("/sessions")
 def create_new_session(req: SessionCreateRequest, current_user: dict = Depends(get_current_user)):
-    """Create a new study session."""
     session_id = create_session(current_user["id"], req.book_id, req.title)
     return {"session_id": session_id, "message": "Session created"}
 
 @app.get("/sessions")
 def list_sessions(current_user: dict = Depends(get_current_user)):
-    """Get all study sessions for the current user."""
     sessions = get_user_sessions(current_user["id"])
     return sessions
 
 @app.get("/sessions/{session_id}/history")
 def get_session_history(session_id: int, current_user: dict = Depends(get_current_user)):
-    """Get quiz history for a specific session."""
     attempts = get_session_quiz_history(session_id)
-    # Parse JSON strings back to objects
     for attempt in attempts:
         attempt["questions"] = json.loads(attempt["questions"])
         attempt["user_answers"] = json.loads(attempt["user_answers"])
@@ -469,7 +465,6 @@ def get_session_history(session_id: int, current_user: dict = Depends(get_curren
 
 @app.post("/sessions/{session_id}/save-attempt")
 def save_quiz_attempt_endpoint(session_id: int, req: QuizAttemptSaveRequest, current_user: dict = Depends(get_current_user)):
-    """Save a quiz attempt to history."""
     save_quiz_attempt(
         session_id=session_id,
         questions=json.dumps(req.questions),
@@ -480,61 +475,6 @@ def save_quiz_attempt_endpoint(session_id: int, req: QuizAttemptSaveRequest, cur
     )
     return {"message": "Quiz attempt saved"}
 
-    # ==========================================
-# SESSION MANAGEMENT ENDPOINTS
-# ==========================================
-
-class SessionCreateRequest(BaseModel):
-    book_id: int
-    title: str
-
-class QuizAttemptSaveRequest(BaseModel):
-    session_id: int
-    questions: list
-    user_answers: dict
-    results: dict
-    score: int
-    max_score: int
-
-@app.post("/sessions")
-def create_session(req: SessionCreateRequest, current_user: dict = Depends(get_current_user)):
-    """Create a new study session."""
-    session_id = create_session(current_user["id"], req.book_id, req.title)
-    return {"session_id": session_id, "message": "Session created"}
-
-@app.get("/sessions")
-def list_sessions(current_user: dict = Depends(get_current_user)):
-    """Get all study sessions for the current user."""
-    sessions = get_user_sessions(current_user["id"])
-    return sessions
-
-@app.get("/sessions/{session_id}/history")
-def get_session_history(session_id: int, current_user: dict = Depends(get_current_user)):
-    """Get quiz history for a specific session."""
-    attempts = get_session_quiz_history(session_id)
-    # Parse JSON strings back to objects
-    for attempt in attempts:
-        attempt["questions"] = json.loads(attempt["questions"])
-        attempt["user_answers"] = json.loads(attempt["user_answers"])
-        attempt["results"] = json.loads(attempt["results"])
-    return attempts
-
-@app.post("/sessions/{session_id}/save-attempt")
-def save_quiz_attempt_endpoint(session_id: int, req: QuizAttemptSaveRequest, current_user: dict = Depends(get_current_user)):
-    """Save a quiz attempt to history."""
-    save_quiz_attempt(
-        session_id=session_id,
-        questions=json.dumps(req.questions),
-        answers=json.dumps(req.user_answers),
-        results=json.dumps(req.results),
-        score=req.score,
-        max_score=req.max_score
-    )
-    return {"message": "Quiz attempt saved"}
-
-# ==========================================
-# RUN THE SERVER
-# ==========================================
 # ==========================================
 # SESSION FUNCTIONS (Living directly in main.py)
 # ==========================================
@@ -571,6 +511,10 @@ def get_session_quiz_history(session_id: int):
     attempts = cursor.fetchall()
     conn.close()
     return [dict(row) for row in attempts]
+
+# ==========================================
+# RUN THE SERVER
+# ==========================================
 if __name__ == "__main__":
     import uvicorn
     print("\n🚀 Starting SA Study App API server...")
