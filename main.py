@@ -101,18 +101,31 @@ class QuizGradeRequest(BaseModel):
 # HELPER FUNCTIONS
 # ==========================================
 def extract_json_from_llm(text: str):
+    # Remove markdown code blocks if the LLM adds them
     text = re.sub(r'^```json\s*', '', text)
     text = re.sub(r'\s*```$', '', text)
-    start = text.find('{') # Look for object start first
-    end = text.rfind('}')
     
-    # Fallback to array if no object found
+    # Try to find array first (for quiz generation)
+    start = text.find('[')
+    end = text.rfind(']')
+    
+    # If no array found, try object (for grading)
     if start == -1 or end == -1:
-        start = text.find('[')
-        end = text.rfind(']')
-        
+        start = text.find('{')
+        end = text.rfind('}')
+    
     if start != -1 and end != -1:
-        return json.loads(text[start:end+1])
+        json_str = text[start:end+1]
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError:
+            # If it still fails, try to clean it more aggressively
+            # Remove any trailing commas before the closing bracket
+            json_str = re.sub(r',\s*}', '}', json_str)
+            json_str = re.sub(r',\s*]', ']', json_str)
+            return json.loads(json_str)
+    
+    # If all else fails, try to parse the whole text
     return json.loads(text)
 
 # ==========================================
