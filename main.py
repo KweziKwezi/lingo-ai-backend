@@ -128,34 +128,45 @@ def extract_json_from_llm(text: str):
     # 1. Aggressively strip ANY markdown code blocks
     text = re.sub(r'```(?:json)?\s*', '', text, flags=re.IGNORECASE)
     text = re.sub(r'\s*```', '', text)
+    text = text.strip()
     
-    # 2. Find the outermost array (preferred for quizzes)
-    start = text.find('[')
-    end = text.rfind(']')
-    
-    if start != -1 and end != -1:
-        json_str = text[start:end+1]
-    else:
-        # Fallback to object (for grading)
-        start = text.find('{')
-        end = text.rfind('}')
-        json_str = text[start:end+1] if start != -1 and end != -1 else text
-        
-    # 3. Fix common LLM JSON formatting mistakes
-    json_str = json_str.replace('None', 'null')
-    json_str = json_str.replace('True', 'true')
-    json_str = json_str.replace('False', 'false')
-    json_str = re.sub(r',\s*}', '}', json_str) # Remove trailing commas in objects
-    json_str = re.sub(r',\s*]', ']', json_str) # Remove trailing commas in arrays
-    
-    # 4. Parse and log errors if it still fails
+    # 2. Try parsing the whole text first (fastest and safest if already clean)
     try:
-        return json.loads(json_str)
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    
+    # 3. If it fails, try to find a JSON object first (for grading responses)
+    start_obj = text.find('{')
+    end_obj = text.rfind('}')
+    if start_obj != -1 and end_obj != -1 and start_obj < end_obj:
+        try:
+            return json.loads(text[start_obj:end_obj+1])
+        except json.JSONDecodeError:
+            pass
+            
+    # 4. If object fails, try to find a JSON array (for quiz generation)
+    start_arr = text.find('[')
+    end_arr = text.rfind(']')
+    if start_arr != -1 and end_arr != -1 and start_arr < end_arr:
+        try:
+            return json.loads(text[start_arr:end_arr+1])
+        except json.JSONDecodeError:
+            pass
+            
+    # 5. Last resort: try to fix common LLM mistakes and parse the whole thing
+    text = text.replace('None', 'null')
+    text = text.replace('True', 'true')
+    text = text.replace('False', 'false')
+    text = re.sub(r',\s*}', '}', text)
+    text = re.sub(r',\s*]', ']', text)
+    
+    try:
+        return json.loads(text)
     except json.JSONDecodeError as e:
-        print(f"❌ [JSON PARSE ERROR] Failed to parse. Raw snippet: {json_str[:300]}")
+        print(f"❌ [JSON PARSE ERROR] Failed to parse. Raw snippet: {text[:300]}")
         print(f"❌ [JSON PARSE ERROR] Details: {e}")
         raise
-
 # ==========================================
 # BASIC ENDPOINTS
 # ==========================================
