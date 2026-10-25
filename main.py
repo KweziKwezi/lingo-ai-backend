@@ -105,14 +105,14 @@ def extract_json_from_llm(text: str):
     text = re.sub(r'^```json\s*', '', text)
     text = re.sub(r'\s*```$', '', text)
     
-    # Try to find array first (for quiz generation)
-    start = text.find('[')
-    end = text.rfind(']')
+    # Try to find OBJECT first (for grading responses)
+    start = text.find('{')
+    end = text.rfind('}')
     
-    # If no array found, try object (for grading)
+    # If no object found, try array (for quiz generation)
     if start == -1 or end == -1:
-        start = text.find('{')
-        end = text.rfind('}')
+        start = text.find('[')
+        end = text.rfind(']')
     
     if start != -1 and end != -1:
         json_str = text[start:end+1]
