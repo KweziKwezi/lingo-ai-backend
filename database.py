@@ -1,5 +1,4 @@
-﻿   # FINAL FIX FOR SESSIONS
-import sqlite3
+﻿import sqlite3
 import os
 
 DB_PATH = "sa_study_app.db"
@@ -12,59 +11,10 @@ def get_db_connection():
 def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            name TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS books (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            title TEXT NOT NULL,
-            grade TEXT NOT NULL,
-            subject TEXT NOT NULL,
-            filename TEXT NOT NULL,
-            file_path TEXT NOT NULL,
-            total_chunks INTEGER NOT NULL,
-            type TEXT NOT NULL,
-            uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users(id)
-        )
-    """)
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS sessions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            book_id INTEGER NOT NULL,
-            title TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users(id),
-            FOREIGN KEY (book_id) REFERENCES books(id)
-        )
-    """)
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS quiz_attempts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id INTEGER NOT NULL,
-            questions TEXT NOT NULL,
-            user_answers TEXT NOT NULL,
-            results TEXT NOT NULL,
-            score INTEGER NOT NULL,
-            max_score INTEGER NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (session_id) REFERENCES sessions(id)
-        )
-    """)
-    
+    cursor.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, name TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS books (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, title TEXT NOT NULL, grade TEXT NOT NULL, subject TEXT NOT NULL, filename TEXT NOT NULL, file_path TEXT NOT NULL, total_chunks INTEGER NOT NULL, type TEXT NOT NULL, uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id))")
+    cursor.execute("CREATE TABLE IF NOT EXISTS sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, book_id INTEGER NOT NULL, title TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id), FOREIGN KEY (book_id) REFERENCES books(id))")
+    cursor.execute("CREATE TABLE IF NOT EXISTS quiz_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id INTEGER NOT NULL, questions TEXT NOT NULL, user_answers TEXT NOT NULL, results TEXT NOT NULL, score INTEGER NOT NULL, max_score INTEGER NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (session_id) REFERENCES sessions(id))")
     conn.commit()
     conn.close()
 
@@ -136,24 +86,16 @@ def delete_book(book_id: int, user_id: int) -> bool:
 def create_session(user_id: int, book_id: int, title: str) -> int:
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO sessions (user_id, book_id, title)
-        VALUES (?, ?, ?)
-    """, (user_id, book_id, title))
+    cursor.execute("INSERT INTO sessions (user_id, book_id, title) VALUES (?, ?, ?)", (user_id, book_id, title))
     session_id = cursor.lastrowid
     conn.commit()
     conn.close()
     return session_id
+
 def get_user_sessions(user_id: int):
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("""
-        SELECT s.*, b.title as book_title, b.subject, b.grade
-        FROM sessions s
-        JOIN books b ON s.book_id = b.id
-        WHERE s.user_id = ?
-        ORDER BY s.created_at DESC
-    """, (user_id,))
+    cursor.execute("SELECT s.*, b.title as book_title, b.subject, b.grade FROM sessions s JOIN books b ON s.book_id = b.id WHERE s.user_id = ? ORDER BY s.created_at DESC", (user_id,))
     sessions = cursor.fetchall()
     conn.close()
     return [dict(row) for row in sessions]
