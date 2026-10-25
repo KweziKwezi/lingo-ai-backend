@@ -95,7 +95,7 @@ class QuizGenerateRequest(BaseModel):
 
 class QuizGradeRequest(BaseModel):
     questions: list
-    user_answers: dict  # Changed to dict to match the frontend object
+    user_answers: dict  # MUST be dict to match frontend
 
 # ==========================================
 # HELPER FUNCTIONS
@@ -258,13 +258,11 @@ def generate_quiz(req: QuizGenerateRequest, current_user: dict = Depends(get_cur
     try:
         print(f"🔍 [QUIZ] Attempting to generate quiz for book_id: {req.book_id}")
         
-        # 1. Get the book
         book = get_book_by_id(req.book_id)
         if not book:
             print(f"❌ [QUIZ] Book not found for id: {req.book_id}")
             raise HTTPException(status_code=404, detail="Book not found")
         
-        # 2. Extract book ID safely
         if isinstance(book, dict):
             b_id = book.get("id")
         else:
@@ -276,16 +274,13 @@ def generate_quiz(req: QuizGenerateRequest, current_user: dict = Depends(get_cur
             
         print(f"✅ [QUIZ] Found book ID: {b_id}. Loading Chroma DB...")
 
-        # 3. FIX: Point to the EXACT SAME directory used in ingest_textbook.py
         db_path = "./sa_textbook_db"
-        embeddings = OpenAIEmbeddings(model="text-embedding-3-small") # Match your ingest file
-        
+        embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
         vectorstore = Chroma(persist_directory=db_path, embedding_function=embeddings)
         
-        # 4. FIX: Use a metadata filter so it ONLY retrieves chunks for THIS specific book!
         retriever = vectorstore.as_retriever(search_kwargs={
-            "k": 8, # Get a bit more context for a whole quiz
-            "filter": {"book_id": str(b_id)} 
+            "k": 8,
+            "filter": {"book_id": str(b_id)}
         })
         
         docs = retriever.invoke("main concepts and details")
@@ -296,11 +291,9 @@ def generate_quiz(req: QuizGenerateRequest, current_user: dict = Depends(get_cur
 
         context = "\n\n".join([doc.page_content for doc in docs])
 
-                # 5. Setup LLM (Increased temperature for variety)
         print(f"🤖 [QUIZ] Calling OpenAI to generate {req.num_questions} UNIQUE questions...")
         llm = ChatOpenAI(temperature=0.7, model="gpt-4o-mini")
 
-        # 6. Prompt for Mixed, VARIED Questions
         prompt = f"""You are an expert teacher. Based ONLY on the context below, generate {req.num_questions} questions.
         
         CRITICAL INSTRUCTION: These questions MUST BE UNIQUE and varied. Do not repeat the same questions. Focus on different facts, definitions, and concepts from the text each time.
@@ -318,6 +311,25 @@ def generate_quiz(req: QuizGenerateRequest, current_user: dict = Depends(get_cur
         - "marks": integer (1 for mcq/short, 3 for long)
 
         Do NOT wrap the output in ```json ... ``` markdown blocks. Just output the raw JSON array."""
+
+        response = llm.invoke(prompt)
+        print("✅ [QUIZ] OpenAI responded. Parsing JSON...")
+        
+        parsed_data = extract_json_from_llm(response.content)
+        print("✅ [QUIZ] Quiz generated successfully!")
+        return {"questions": parsed_data}
+        
+    except json.JSONDecodeError as e:
+        print(f"❌ [QUIZ] JSON Decode Error: {e}")
+        raise HTTPException(status_code=500, detail="AI failed to generate valid JSON format.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ [QUIZ] CRITICAL ERROR: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+
 
 @app.post("/grade-quiz")
 def grade_quiz(req: QuizGradeRequest, current_user: dict = Depends(get_current_user)):
@@ -351,7 +363,6 @@ def grade_quiz(req: QuizGradeRequest, current_user: dict = Depends(get_current_u
         response = llm.invoke(prompt)
         parsed_data = extract_json_from_llm(response.content)
         
-        # Safety check: ensure graded_questions exists
         if not isinstance(parsed_data, dict) or "graded_questions" not in parsed_data:
             raise ValueError("AI returned invalid grading structure")
             
@@ -362,6 +373,7 @@ def grade_quiz(req: QuizGradeRequest, current_user: dict = Depends(get_current_u
     except Exception as e:
         print(f"❌ [GRADE] Error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Grading failed: {str(e)}")
+
 # ==========================================
 # RUN THE SERVER
 # ==========================================
