@@ -258,11 +258,13 @@ def generate_quiz(req: QuizGenerateRequest, current_user: dict = Depends(get_cur
     try:
         print(f"🔍 [QUIZ] Attempting to generate quiz for book_id: {req.book_id}")
         
+        # 1. Get the book
         book = get_book_by_id(req.book_id)
         if not book:
             print(f"❌ [QUIZ] Book not found for id: {req.book_id}")
             raise HTTPException(status_code=404, detail="Book not found")
         
+        # 2. Extract book ID safely
         if isinstance(book, dict):
             b_id = book.get("id")
         else:
@@ -274,17 +276,31 @@ def generate_quiz(req: QuizGenerateRequest, current_user: dict = Depends(get_cur
             
         print(f"✅ [QUIZ] Found book ID: {b_id}. Loading Chroma DB...")
 
-        embeddings = OpenAIEmbeddings()
-        vectorstore = Chroma(persist_directory=f"./chroma_db/{b_id}", embedding_function=embeddings)
+        # 3. FIX: Point to the EXACT SAME directory used in ingest_textbook.py
+        db_path = "./sa_textbook_db"
+        embeddings = OpenAIEmbeddings(model="text-embedding-3-small") # Match your ingest file
         
-        retriever = vectorstore.as_retriever(search_kwargs={"k": 6})
+        vectorstore = Chroma(persist_directory=db_path, embedding_function=embeddings)
+        
+        # 4. FIX: Use a metadata filter so it ONLY retrieves chunks for THIS specific book!
+        retriever = vectorstore.as_retriever(search_kwargs={
+            "k": 8, # Get a bit more context for a whole quiz
+            "filter": {"book_id": str(b_id)} 
+        })
+        
         docs = retriever.invoke("main concepts and details")
-        context = "\n\n".join([doc.page_content for doc in docs])
-        print(f"✅ [QUIZ] Retrieved {len(docs)} chunks of context.")
+        print(f"✅ [QUIZ] Retrieved {len(docs)} chunks of context for book {b_id}.")
+        
+        if len(docs) == 0:
+            raise HTTPException(status_code=400, detail="No content found for this book. Please ensure it was uploaded successfully.")
 
+        context = "\n\n".join([doc.page_content for doc in docs])
+
+        # 5. Setup LLM
         print(f"🤖 [QUIZ] Calling OpenAI to generate {req.num_questions} questions...")
         llm = ChatOpenAI(temperature=0.5, model="gpt-4o-mini")
 
+        # 6. Prompt for Mixed Questions
         prompt = f"""You are an expert teacher. Based ONLY on the context below, generate {req.num_questions} questions.
 The questions MUST be a mix of these three types: "mcq", "short", and "long".
 

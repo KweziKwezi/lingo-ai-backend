@@ -26,9 +26,6 @@ def ingest_textbook(file_path: str, title: str, grade: str, subject: str,
     """
     Ingest a textbook or slide deck into the vector database.
     Supports PDF and PPTX files.
-    
-    Returns:
-        int: The book_id in the database
     """
     print(f"📖 Loading: {title}...")
     
@@ -71,13 +68,12 @@ def ingest_textbook(file_path: str, title: str, grade: str, subject: str,
     metadatas = []
     
     for i, chunk in enumerate(chunks):
-        # Assign chapter/slide numbers based on chunk position
         section_num = (i // 5) + 1
         section_label = "Slide" if type == "slides" else "Chapter"
         
         documents.append(chunk)
         metadatas.append({
-            "book_id": str(book_id),
+            "book_id": str(book_id), # CRITICAL: This is what we filter by in main.py!
             "book_title": title,
             "grade": grade,
             "subject": subject,
@@ -92,7 +88,7 @@ def ingest_textbook(file_path: str, title: str, grade: str, subject: str,
     embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
     
     db = Chroma(
-        persist_directory="./sa_textbook_db",
+        persist_directory="./sa_textbook_db", # GLOBAL FOLDER
         embedding_function=embeddings
     )
     
@@ -101,20 +97,5 @@ def ingest_textbook(file_path: str, title: str, grade: str, subject: str,
         metadatas=metadatas
     )
     
-    print(f"✅ Successfully ingested: {title} (ID: {book_id})\n")
+    print(f"✅ Successfully ingested: {title} (ID: {book_id}) into ./sa_textbook_db\n")
     return book_id
-
-# ==========================================
-# Test it manually (optional)
-# ==========================================
-if __name__ == "__main__":
-    # Example: ingest a PDF
-    book_id = ingest_textbook(
-        file_path="textbook.pdf",
-        title="Grade 10 Mathematics",
-        grade="10",
-        subject="Mathematics",
-        user_id=1,
-        type="textbook"
-    )
-    print(f"Book ID: {book_id}")
