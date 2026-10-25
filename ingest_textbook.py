@@ -14,7 +14,7 @@ def ingest_textbook(file_path: str, title: str, grade: str, subject: str,
                     user_id: int, type: str = "textbook") -> int:
     """
     Ingest a textbook or slide deck into the vector database.
-    Supports PDF and PPTX files with preserved page/slide ordering.
+    Automatically deletes old chunks for this book before ingesting.
     """
     print(f"📖 Loading: {title}...")
     
@@ -23,7 +23,6 @@ def ingest_textbook(file_path: str, title: str, grade: str, subject: str,
     # 1. Extract text and preserve page/slide metadata
     if file_path.endswith('.pdf'):
         loader = PyPDFLoader(file_path)
-        # load() keeps the 'page' metadata automatically
         raw_docs = loader.load()
         
         text_splitter = RecursiveCharacterTextSplitter(
@@ -32,7 +31,6 @@ def ingest_textbook(file_path: str, title: str, grade: str, subject: str,
             separators=["\nChapter ", "\nCHAPTER ", "\n\n", "\n", " ", ""]
         )
         
-        # Split while keeping the original 'page' metadata
         documents = text_splitter.split_documents(raw_docs)
         
     elif file_path.endswith('.pptx'):
@@ -51,12 +49,10 @@ def ingest_textbook(file_path: str, title: str, grade: str, subject: str,
             
             if slide_text:
                 full_slide_text = "\n".join(slide_text)
-                # Create a document for this slide
                 doc = Document(
                     page_content=full_slide_text,
                     metadata={"source": file_path, "page": slide_num, "type": "slide"}
                 )
-                # Split the slide text if it's too long, but keep the slide number
                 split_docs = text_splitter.split_documents([doc])
                 documents.extend(split_docs)
     else:
@@ -78,12 +74,24 @@ def ingest_textbook(file_path: str, title: str, grade: str, subject: str,
     )
     print(f"   ✅ Registered with ID: {book_id}")
     
-    # 3. Prepare final metadata for ChromaDB
+    # 3. 🔥 CRITICAL: Delete ALL old chunks for this book_id before adding new ones
+    print(f"   🧹 Cleaning up old chunks for book_id {book_id}...")
+    try:
+        embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+        db = Chroma(persist_directory="./sa_textbook_db", embedding_function=embeddings)
+        collection = db._collection
+        
+        # Delete all documents with this book_id
+        collection.delete(where={"book_id": str(book_id)})
+        print(f"   ✅ Old chunks deleted")
+    except Exception as e:
+        print(f"   ⚠️  Warning: Could not clean old chunks: {e}")
+    
+    # 4. Prepare final metadata for ChromaDB
     final_documents = []
     final_metadatas = []
     
     for i, doc in enumerate(documents):
-        # Safely get the page/slide number, default to chunk_index if missing
         page_num = doc.metadata.get("page", (i // 5) + 1)
         section_label = "Slide" if type == "slides" else "Page"
         
@@ -97,10 +105,10 @@ def ingest_textbook(file_path: str, title: str, grade: str, subject: str,
             "type": type,
             "user_id": str(user_id),
             "chunk_index": i,
-            "page": int(page_num) # Ensure it's an integer for sorting
+            "page": int(page_num)
         })
     
-    # 4. Add to ChromaDB
+    # 5. Add to ChromaDB
     print("   Embedding and storing in ChromaDB...")
     embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
     
