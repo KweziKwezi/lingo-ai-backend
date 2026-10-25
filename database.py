@@ -1,8 +1,6 @@
-   # FORCE GIT UPDATE - SESSION TABLES
-import sqlite3
+﻿import sqlite3
 import os
 
-# Ensure the database file is in the current directory
 DB_PATH = "sa_study_app.db"
 
 def get_db_connection():
@@ -14,7 +12,6 @@ def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # Users table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -25,7 +22,6 @@ def init_db():
         )
     """)
     
-    # Books table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS books (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,7 +38,6 @@ def init_db():
         )
     """)
 
-    # Sessions table (NEW)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -55,7 +50,6 @@ def init_db():
         )
     """)
     
-    # Quiz attempts table (NEW)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS quiz_attempts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -73,20 +67,13 @@ def init_db():
     conn.commit()
     conn.close()
 
-# ==========================================
-# USER FUNCTIONS
-# ==========================================
 def create_user(email: str, password_hash: str, name: str) -> int:
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute(
-            "INSERT INTO users (email, password_hash, name) VALUES (?, ?, ?)",
-            (email, password_hash, name)
-        )
+        cursor.execute("INSERT INTO users (email, password_hash, name) VALUES (?, ?, ?)", (email, password_hash, name))
         conn.commit()
-        user_id = cursor.lastrowid
-        return user_id
+        return cursor.lastrowid
     except sqlite3.IntegrityError:
         return None
     finally:
@@ -108,16 +95,10 @@ def get_user_by_id(user_id: int):
     conn.close()
     return dict(user) if user else None
 
-# ==========================================
-# BOOK FUNCTIONS
-# ==========================================
 def add_book(title: str, grade: str, subject: str, filename: str, file_path: str, total_chunks: int, user_id: int, type: str) -> int:
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO books (user_id, title, grade, subject, filename, file_path, total_chunks, type)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (user_id, title, grade, subject, filename, file_path, total_chunks, type))
+    cursor.execute("INSERT INTO books (user_id, title, grade, subject, filename, file_path, total_chunks, type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (user_id, title, grade, subject, filename, file_path, total_chunks, type))
     book_id = cursor.lastrowid
     conn.commit()
     conn.close()
@@ -151,16 +132,10 @@ def delete_book(book_id: int, user_id: int) -> bool:
     conn.close()
     return deleted
 
-# ==========================================
-# SESSION & QUIZ HISTORY FUNCTIONS (NEW)
-# ==========================================
 def create_session(user_id: int, book_id: int, title: str) -> int:
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO sessions (user_id, book_id, title)
-        VALUES (?, ?, ?)
-    """, (user_id, book_id, title))
+    cursor.execute("INSERT INTO sessions (user_id, book_id, title) VALUES (?, ?, ?)", (user_id, book_id, title))
     session_id = cursor.lastrowid
     conn.commit()
     conn.close()
@@ -183,24 +158,16 @@ def get_user_sessions(user_id: int):
 def save_quiz_attempt(session_id: int, questions: str, answers: str, results: str, score: int, max_score: int):
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO quiz_attempts (session_id, questions, user_answers, results, score, max_score)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (session_id, questions, answers, results, score, max_score))
+    cursor.execute("INSERT INTO quiz_attempts (session_id, questions, user_answers, results, score, max_score) VALUES (?, ?, ?, ?, ?, ?)", (session_id, questions, answers, results, score, max_score))
     conn.commit()
     conn.close()
 
 def get_session_quiz_history(session_id: int):
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("""
-        SELECT * FROM quiz_attempts
-        WHERE session_id = ?
-        ORDER BY created_at DESC
-    """, (session_id,))
+    cursor.execute("SELECT * FROM quiz_attempts WHERE session_id = ? ORDER BY created_at DESC", (session_id,))
     attempts = cursor.fetchall()
     conn.close()
     return [dict(row) for row in attempts]
 
-# Initialize the database when the module is imported
 init_db()
