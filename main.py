@@ -18,7 +18,8 @@ from hybrid_tutor import hybrid_tutor
 from ingest_textbook import ingest_textbook
 from database import (
     get_all_books, get_book_by_id, delete_book,
-    create_user, get_user_by_email, get_user_by_id
+    create_user, get_user_by_email, get_user_by_id,
+    create_session, get_user_sessions, save_quiz_attempt, get_session_quiz_history
 )
 from auth import (
     verify_password, get_password_hash, create_access_token,
@@ -95,7 +96,19 @@ class QuizGenerateRequest(BaseModel):
 
 class QuizGradeRequest(BaseModel):
     questions: list
-    user_answers: dict  # MUST be dict to match frontend
+    user_answers: dict
+
+class SessionCreateRequest(BaseModel):
+    book_id: int
+    title: str
+
+class QuizAttemptSaveRequest(BaseModel):
+    session_id: int
+    questions: list
+    user_answers: dict
+    results: dict
+    score: int
+    max_score: int
 
 # ==========================================
 # HELPER FUNCTIONS
@@ -120,12 +133,10 @@ def extract_json_from_llm(text: str):
             return json.loads(json_str)
         except json.JSONDecodeError:
             # If it still fails, try to clean it more aggressively
-            # Remove any trailing commas before the closing bracket
             json_str = re.sub(r',\s*}', '}', json_str)
             json_str = re.sub(r',\s*]', ']', json_str)
             return json.loads(json_str)
     
-    # If all else fails, try to parse the whole text
     return json.loads(text)
 
 # ==========================================
@@ -139,7 +150,9 @@ def home():
             "User authentication",
             "Multi-textbook library",
             "Native language typing & responding",
-            "PDF and PPTX upload"
+            "PDF and PPTX upload",
+            "Quiz generation with AI grading",
+            "Study session management"
         ]
     }
 
@@ -353,7 +366,6 @@ def generate_quiz(req: QuizGenerateRequest, current_user: dict = Depends(get_cur
 @app.post("/grade-quiz")
 def grade_quiz(req: QuizGradeRequest, current_user: dict = Depends(get_current_user)):
     try:
-        # Lower temperature for strict, predictable JSON formatting
         llm = ChatOpenAI(temperature=0.1, model="gpt-4o-mini")
 
         prompt = f"""You are an expert teacher grading a quiz. 
@@ -365,6 +377,8 @@ def grade_quiz(req: QuizGradeRequest, current_user: dict = Depends(get_current_u
         Grade the student's work. For MCQs, check if the index matches 'correct_answer'. 
         For short/long answers, compare their answer to the 'model_answer' and award partial marks if they are close. If the student left an answer blank, award 0 marks and note it.
 
+        CRITICAL: For EVERY question that is incorrect or missing, you MUST include the correct answer in the feedback.
+
         Output ONLY a valid JSON OBJECT (starting with {{ and ending with }}), NOT a list. It must have this EXACT structure:
         {{
           "total_score": 0,
@@ -375,6 +389,12 @@ def grade_quiz(req: QuizGradeRequest, current_user: dict = Depends(get_current_u
               "is_correct": true,
               "awarded_marks": 1,
               "feedback": "Great job!"
+            }},
+            {{
+              "id": 2,
+              "is_correct": false,
+              "awarded_marks": 0,
+              "feedback": "Incorrect. The correct answer is: [INSERT CORRECT ANSWER HERE]. Explanation: [EXPLAIN WHY]"
             }}
           ]
         }}
@@ -383,7 +403,6 @@ def grade_quiz(req: QuizGradeRequest, current_user: dict = Depends(get_current_u
         response = llm.invoke(prompt)
         raw_content = response.content
         
-        # LOGGING: Let's see exactly what the AI returned
         print(f"🤖 [GRADE] Raw AI Response (first 500 chars): {raw_content[:500]}")
         
         parsed_data = extract_json_from_llm(raw_content)
@@ -391,8 +410,6 @@ def grade_quiz(req: QuizGradeRequest, current_user: dict = Depends(get_current_u
         print(f"📦 [GRADE] Parsed Data Type: {type(parsed_data)}")
         if isinstance(parsed_data, dict):
             print(f"📦 [GRADE] Parsed Data Keys: {list(parsed_data.keys())}")
-        else:
-            print(f"❌ [GRADE] Parsed data is NOT a dict. It is: {parsed_data}")
         
         if not isinstance(parsed_data, dict) or "graded_questions" not in parsed_data:
             print(f"❌ [GRADE] Invalid structure. Full parsed data: {parsed_data}")
@@ -406,6 +423,97 @@ def grade_quiz(req: QuizGradeRequest, current_user: dict = Depends(get_current_u
     except Exception as e:
         print(f"❌ [GRADE] Critical Error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Grading failed: {str(e)}")
+
+# ==========================================
+# SESSION MANAGEMENT ENDPOINTS
+# ==========================================
+@app.post("/sessions")
+def create_new_session(req: SessionCreateRequest, current_user: dict = Depends(get_current_user)):
+    """Create a new study session."""
+    session_id = create_session(current_user["id"], req.book_id, req.title)
+    return {"session_id": session_id, "message": "Session created"}
+
+@app.get("/sessions")
+def list_sessions(current_user: dict = Depends(get_current_user)):
+    """Get all study sessions for the current user."""
+    sessions = get_user_sessions(current_user["id"])
+    return sessions
+
+@app.get("/sessions/{session_id}/history")
+def get_session_history(session_id: int, current_user: dict = Depends(get_current_user)):
+    """Get quiz history for a specific session."""
+    attempts = get_session_quiz_history(session_id)
+    # Parse JSON strings back to objects
+    for attempt in attempts:
+        attempt["questions"] = json.loads(attempt["questions"])
+        attempt["user_answers"] = json.loads(attempt["user_answers"])
+        attempt["results"] = json.loads(attempt["results"])
+    return attempts
+
+@app.post("/sessions/{session_id}/save-attempt")
+def save_quiz_attempt_endpoint(session_id: int, req: QuizAttemptSaveRequest, current_user: dict = Depends(get_current_user)):
+    """Save a quiz attempt to history."""
+    save_quiz_attempt(
+        session_id=session_id,
+        questions=json.dumps(req.questions),
+        answers=json.dumps(req.user_answers),
+        results=json.dumps(req.results),
+        score=req.score,
+        max_score=req.max_score
+    )
+    return {"message": "Quiz attempt saved"}
+
+    # ==========================================
+# SESSION MANAGEMENT ENDPOINTS
+# ==========================================
+
+class SessionCreateRequest(BaseModel):
+    book_id: int
+    title: str
+
+class QuizAttemptSaveRequest(BaseModel):
+    session_id: int
+    questions: list
+    user_answers: dict
+    results: dict
+    score: int
+    max_score: int
+
+@app.post("/sessions")
+def create_session(req: SessionCreateRequest, current_user: dict = Depends(get_current_user)):
+    """Create a new study session."""
+    session_id = create_session(current_user["id"], req.book_id, req.title)
+    return {"session_id": session_id, "message": "Session created"}
+
+@app.get("/sessions")
+def list_sessions(current_user: dict = Depends(get_current_user)):
+    """Get all study sessions for the current user."""
+    sessions = get_user_sessions(current_user["id"])
+    return sessions
+
+@app.get("/sessions/{session_id}/history")
+def get_session_history(session_id: int, current_user: dict = Depends(get_current_user)):
+    """Get quiz history for a specific session."""
+    attempts = get_session_quiz_history(session_id)
+    # Parse JSON strings back to objects
+    for attempt in attempts:
+        attempt["questions"] = json.loads(attempt["questions"])
+        attempt["user_answers"] = json.loads(attempt["user_answers"])
+        attempt["results"] = json.loads(attempt["results"])
+    return attempts
+
+@app.post("/sessions/{session_id}/save-attempt")
+def save_quiz_attempt_endpoint(session_id: int, req: QuizAttemptSaveRequest, current_user: dict = Depends(get_current_user)):
+    """Save a quiz attempt to history."""
+    save_quiz_attempt(
+        session_id=session_id,
+        questions=json.dumps(req.questions),
+        answers=json.dumps(req.user_answers),
+        results=json.dumps(req.results),
+        score=req.score,
+        max_score=req.max_score
+    )
+    return {"message": "Quiz attempt saved"}
 
 # ==========================================
 # RUN THE SERVER
