@@ -785,7 +785,6 @@ def get_book_content(book_id: int):
         embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
         vectorstore = Chroma(persist_directory="./sa_textbook_db", embedding_function=embeddings)
         
-        # Access the underlying collection to get all documents for this book
         collection = vectorstore._collection
         
         results = collection.get(
@@ -795,11 +794,24 @@ def get_book_content(book_id: int):
         
         chunks = []
         if results and results['documents']:
-            # Zip documents and metadatas together
-            zipped = list(zip(results['documents'], results['metadatas']))
-            # Sort by chunk_index to ensure pages are in the correct order
-            zipped.sort(key=lambda x: int(x[1].get('chunk_index', 0)))
+            # DEBUG: Log the first metadata item so we know what keys exist
+            print(f"🔍 [LIBRARY] Sample metadata for book {book_id}: {results['metadatas'][0]}")
             
+            zipped = list(zip(results['documents'], results['metadatas']))
+            
+            # ROBUST SORTING: Check for multiple possible index keys
+            def get_sort_key(item):
+                meta = item[1]
+                # Try to find any numeric index key in the metadata
+                for key in ['chunk_index', 'page', 'chunk', 'index', 'chunk_id']:
+                    if key in meta:
+                        try:
+                            return int(meta[key])
+                        except (ValueError, TypeError):
+                            pass
+                return 0 # Fallback if no index is found
+            
+            zipped.sort(key=get_sort_key)
             chunks = [{"text": doc, "metadata": meta} for doc, meta in zipped]
             
         return {"chunks": chunks}
