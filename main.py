@@ -42,10 +42,10 @@ app = FastAPI(
 # ==========================================
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],          # Allows your Vercel app, localhost, etc.
-    allow_credentials=False,      # MUST be False when allow_origins is "*"
-    allow_methods=["*"],          # Allows GET, POST, PUT, DELETE, etc.
-    allow_headers=["*"],          # Allows all headers (including Authorization)
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # ==========================================
@@ -89,7 +89,6 @@ class BookResponse(BaseModel):
     type: str
     uploaded_at: str
 
-# Quiz Models
 class QuizGenerateRequest(BaseModel):
     book_id: int
     num_questions: int = 5
@@ -102,10 +101,8 @@ class QuizGradeRequest(BaseModel):
 # HELPER FUNCTIONS
 # ==========================================
 def extract_json_from_llm(text: str):
-    # Remove markdown code blocks if the LLM adds them
     text = re.sub(r'^```json\s*', '', text)
     text = re.sub(r'\s*```$', '', text)
-    # Find the first [ and last ]
     start = text.find('[')
     end = text.rfind(']')
     if start != -1 and end != -1:
@@ -220,7 +217,12 @@ async def upload_textbook(
             user_id=current_user["id"],
             type=type
         )
-        return {"message": "File successfully uploaded and added to the library!", "book_id": book_id, "title": title, "type": type}
+        return {
+            "message": "File successfully uploaded and added to the library!", 
+            "book_id": book_id, 
+            "title": title, 
+            "type": type
+        }
     except Exception as e:
         if os.path.exists(file_path):
             os.remove(file_path)
@@ -256,13 +258,11 @@ def generate_quiz(req: QuizGenerateRequest, current_user: dict = Depends(get_cur
     try:
         print(f"🔍 [QUIZ] Attempting to generate quiz for book_id: {req.book_id}")
         
-        # 1. Get the book using your existing database function
         book = get_book_by_id(req.book_id)
         if not book:
             print(f"❌ [QUIZ] Book not found for id: {req.book_id}")
             raise HTTPException(status_code=404, detail="Book not found")
         
-        # 2. Extract book ID safely (handles both dict and object returns)
         if isinstance(book, dict):
             b_id = book.get("id")
         else:
@@ -274,41 +274,36 @@ def generate_quiz(req: QuizGenerateRequest, current_user: dict = Depends(get_cur
             
         print(f"✅ [QUIZ] Found book ID: {b_id}. Loading Chroma DB...")
 
-        # 3. Load the vector store for this specific book
         embeddings = OpenAIEmbeddings()
         vectorstore = Chroma(persist_directory=f"./chroma_db/{b_id}", embedding_function=embeddings)
         
-        # Retrieve context
         retriever = vectorstore.as_retriever(search_kwargs={"k": 6})
         docs = retriever.invoke("main concepts and details")
         context = "\n\n".join([doc.page_content for doc in docs])
         print(f"✅ [QUIZ] Retrieved {len(docs)} chunks of context.")
 
-        # 4. Setup LLM
         print(f"🤖 [QUIZ] Calling OpenAI to generate {req.num_questions} questions...")
-      llm = ChatOpenAI(temperature=0.5, model="gpt-3.5-turbo")
+        llm = ChatOpenAI(temperature=0.5, model="gpt-4o-mini")
 
-        # 5. Prompt for Mixed Questions
         prompt = f"""You are an expert teacher. Based ONLY on the context below, generate {req.num_questions} questions.
-        The questions MUST be a mix of these three types: "mcq", "short", and "long".
-        
-        Context: {context}
+The questions MUST be a mix of these three types: "mcq", "short", and "long".
 
-        Output ONLY a valid JSON array of objects. Each object must have:
-        - "id": integer (1 to {req.num_questions})
-        - "type": string ("mcq", "short", or "long")
-        - "question": string
-        - "options": array of 4 strings (ONLY for "mcq", else null)
-        - "correct_answer": integer 0-3 (ONLY for "mcq", else null)
-        - "model_answer": string (The correct answer/explanation for grading short/long)
-        - "marks": integer (1 for mcq/short, 3 for long)
+Context: {context}
 
-        Do NOT wrap the output in ```json ... ``` markdown blocks. Just output the raw JSON array."""
+Output ONLY a valid JSON array of objects. Each object must have:
+- "id": integer (1 to {req.num_questions})
+- "type": string ("mcq", "short", or "long")
+- "question": string
+- "options": array of 4 strings (ONLY for "mcq", else null)
+- "correct_answer": integer 0-3 (ONLY for "mcq", else null)
+- "model_answer": string (The correct answer/explanation for grading short/long)
+- "marks": integer (1 for mcq/short, 3 for long)
+
+Do NOT wrap the output in ```json ... ``` markdown blocks. Just output the raw JSON array."""
 
         response = llm.invoke(prompt)
         print("✅ [QUIZ] OpenAI responded. Parsing JSON...")
         
-        # 6. Clean and parse JSON
         parsed_data = extract_json_from_llm(response.content)
         print("✅ [QUIZ] Quiz generated successfully!")
         return {"questions": parsed_data}
@@ -317,42 +312,42 @@ def generate_quiz(req: QuizGenerateRequest, current_user: dict = Depends(get_cur
         print(f"❌ [QUIZ] JSON Decode Error: {e}")
         raise HTTPException(status_code=500, detail="AI failed to generate valid JSON format.")
     except HTTPException:
-        raise # Re-raise HTTP exceptions as-is
+        raise
     except Exception as e:
         print(f"❌ [QUIZ] CRITICAL ERROR: {str(e)}")
         import traceback
-        traceback.print_exc() # This will print the full red traceback to Render logs!
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
 
 
 @app.post("/grade-quiz")
 def grade_quiz(req: QuizGradeRequest, current_user: dict = Depends(get_current_user)):
     try:
-       llm = ChatOpenAI(temperature=0.2, model="gpt-4o-mini")
+        llm = ChatOpenAI(temperature=0.2, model="gpt-4o-mini")
 
         prompt = f"""You are an expert teacher grading a quiz. 
-        Here are the original questions and the student's answers.
-        
-        Questions: {json.dumps(req.questions)}
-        Student Answers: {json.dumps(req.user_answers)}
+Here are the original questions and the student's answers.
 
-        Grade the student's work. For MCQs, check if the index matches 'correct_answer'. 
-        For short/long answers, compare their answer to the 'model_answer' and award partial marks if they are close.
+Questions: {json.dumps(req.questions)}
+Student Answers: {json.dumps(req.user_answers)}
 
-        Output ONLY a valid JSON object with this exact structure:
-        {{
-          "total_score": integer,
-          "max_score": integer,
-          "graded_questions": [
-            {{
-              "id": integer,
-              "is_correct": boolean,
-              "awarded_marks": integer,
-              "feedback": string (Explain why it's right or wrong, be encouraging)
-            }}
-          ]
-        }}
-        Do NOT wrap the output in ```json ... ``` markdown blocks."""
+Grade the student's work. For MCQs, check if the index matches 'correct_answer'. 
+For short/long answers, compare their answer to the 'model_answer' and award partial marks if they are close.
+
+Output ONLY a valid JSON object with this exact structure:
+{{
+  "total_score": integer,
+  "max_score": integer,
+  "graded_questions": [
+    {{
+      "id": integer,
+      "is_correct": boolean,
+      "awarded_marks": integer,
+      "feedback": string (Explain why it's right or wrong, be encouraging)
+    }}
+  ]
+}}
+Do NOT wrap the output in ```json ... ``` markdown blocks."""
 
         response = llm.invoke(prompt)
         parsed_data = extract_json_from_llm(response.content)
