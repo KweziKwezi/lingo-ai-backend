@@ -8,6 +8,8 @@ from typing import Optional, List
 from dotenv import load_dotenv
 import json
 import re
+
+
 from pydantic import BaseModel
 from langchain_openai import ChatOpenAI
 from hybrid_tutor import hybrid_tutor
@@ -353,6 +355,104 @@ def generate_study_material(req: StudyMaterialRequest, current_user: dict = Depe
         return {"data": parsed_data, "type": req.type}
     except json.JSONDecodeError:
         raise HTTPException(status_code=500, detail="AI failed to generate valid JSON. Please try again.")
+
+# --- Quiz Models ---
+class QuizGenerateRequest(BaseModel):
+    book_id: int
+    num_questions: int = 5
+
+class QuizGradeRequest(BaseModel):
+    questions: list  # The original generated questions
+    user_answers: list # The student's answers
+
+# --- Helper to extract JSON from LLM ---
+def extract_json_from_llm(text):
+    # Remove markdown code blocks if the LLM adds them
+    text = re.sub(r'^```json\s*', '', text)
+    text = re.sub(r'\s*```$', '', text)
+    # Find the first [ and last ]
+    start = text.find('[')
+    end = text.rfind(']')
+    if start != -1 and end != -1:
+        return json.loads(text[start:end+1])
+    return json.loads(text)
+
+@app.post("/generate-quiz")
+def generate_quiz(req: QuizGenerateRequest, current_user: dict = Depends(get_current_user)):
+    # 1. Get Context from ChromaDB (Mirror your /ask endpoint logic)
+    book = db.get_book(req.book_id) # Adjust this to match your actual DB query
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    
+    # Load vector store (Adjust path to match your /ask endpoint)
+    vectorstore = Chroma(persist_directory=f"chroma_db/{book['id']}", embedding_function=embeddings)
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 6}) # Get more context for a whole quiz
+    docs = retriever.get_relevant_documents("main concepts and details")
+    context = "\n\n".join([doc.page_content for doc in docs])
+
+    # 2. Setup LLM
+    llm = ChatOpenAI(temperature=0.5, model="gpt-3.5-turbo")
+
+    # 3. Prompt for Mixed Questions
+    prompt = f"""You are an expert teacher. Based ONLY on the context below, generate {req.num_questions} questions.
+    The questions MUST be a mix of these three types: "mcq", "short", and "long".
+    
+    Context: {context}
+
+    Output ONLY a valid JSON array of objects. Each object must have:
+    - "id": integer (1 to {req.num_questions})
+    - "type": string ("mcq", "short", or "long")
+    - "question": string
+    - "options": array of 4 strings (ONLY for "mcq", else null)
+    - "correct_answer": integer 0-3 (ONLY for "mcq", else null)
+    - "model_answer": string (The correct answer/explanation for grading short/long)
+    - "marks": integer (1 for mcq/short, 3 for long)
+
+    Do NOT wrap the output in ```json ... ``` markdown blocks. Just output the raw JSON array."""
+
+    response = llm.invoke(prompt)
+    try:
+        parsed_data = extract_json_from_llm(response.content)
+        return {"questions": parsed_data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI failed to generate valid JSON: {str(e)}")
+
+@app.post("/grade-quiz")
+def grade_quiz(req: QuizGradeRequest, current_user: dict = Depends(get_current_user)):
+    llm = ChatOpenAI(temperature=0.2, model="gpt-3.5-turbo")
+
+    prompt = f"""You are an expert teacher grading a quiz. 
+    Here are the original questions and the student's answers.
+    
+    Questions: {json.dumps(req.questions)}
+    Student Answers: {json.dumps(req.user_answers)}
+
+    Grade the student's work. For MCQs, check if the index matches 'correct_answer'. 
+    For short/long answers, compare their answer to the 'model_answer' and award partial marks if they are close.
+
+    Output ONLY a valid JSON object with this exact structure:
+    {{
+      "total_score": integer,
+      "max_score": integer,
+      "graded_questions": [
+        {{
+          "id": integer,
+          "is_correct": boolean,
+          "awarded_marks": integer,
+          "feedback": string (Explain why it's right or wrong, be encouraging)
+        }}
+      ]
+    }}
+    Do NOT wrap the output in ```json ... ``` markdown blocks."""
+
+    response = llm.invoke(prompt)
+    try:
+        parsed_data = extract_json_from_llm(response.content)
+        return parsed_data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI failed to grade: {str(e)}")
+
+
 # ==========================================
 # RUN THE SERVER
 # ==========================================
