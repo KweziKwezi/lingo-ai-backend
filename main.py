@@ -38,6 +38,34 @@ def ensure_new_tables():
     conn.close()
 
 ensure_new_tables()
+# Ensure chat history tables exist
+def ensure_chat_tables():
+    conn = sqlite3.connect("sa_study_app.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS conversations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            book_id INTEGER,
+            title TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id INTEGER NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+ensure_chat_tables()
 
 # Create uploads folder if it doesn't exist
 if not os.path.exists("uploads"):
@@ -86,10 +114,12 @@ class QuestionRequest(BaseModel):
     language: str
     book_id: Optional[int] = None
     chapter: Optional[str] = None
+    conversation_id: Optional[int] = None
 
 class QuestionResponse(BaseModel):
     answer: str
     source: str
+    conversation_id: Optional[int] = None
 
 class BookResponse(BaseModel):
     id: int
@@ -299,17 +329,34 @@ def ask_question(request: QuestionRequest, current_user: dict = Depends(get_curr
         print(f"   Language: {request.language}")
         print(f"   Book ID: {request.book_id}")
         
+        # If no conversation_id is provided, create a new one
+        conversation_id = getattr(request, 'conversation_id', None)
+        if not conversation_id:
+            title = request.question[:50] + "..." if len(request.question) > 50 else request.question
+            conversation_id = create_conversation(current_user["id"], request.book_id, title)
+        
+        # Save the user's question
+        add_message(conversation_id, "user", request.question)
+        
+        # Get the AI answer
         answer, source = hybrid_tutor(
             question=request.question,
             target_language=request.language,
             book_id=request.book_id,
             chapter=request.chapter
         )
-        return QuestionResponse(answer=answer, source=source)
+        
+        # Save the AI's response
+        add_message(conversation_id, "assistant", answer)
+        
+        return QuestionResponse(
+            answer=answer,
+            source=source,
+            conversation_id=conversation_id  # Add this field to QuestionResponse model
+        )
     except Exception as e:
         print(f"❌ Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
 # ==========================================
 # QUIZ & FLASHCARD ENDPOINTS (Authenticated)
 # ==========================================
@@ -485,6 +532,44 @@ def save_quiz_attempt_endpoint(session_id: int, req: QuizAttemptSaveRequest, cur
         max_score=req.max_score
     )
     return {"message": "Quiz attempt saved"}
+    # ==========================================
+# CHAT HISTORY ENDPOINTS
+# ==========================================
+class ConversationCreateRequest(BaseModel):
+    book_id: Optional[int] = None
+    title: str
+
+class MessageAddRequest(BaseModel):
+    conversation_id: int
+    role: str
+    content: str
+
+@app.post("/conversations")
+def create_new_conversation(req: ConversationCreateRequest, current_user: dict = Depends(get_current_user)):
+    conv_id = create_conversation(current_user["id"], req.book_id, req.title)
+    return {"conversation_id": conv_id, "message": "Conversation created"}
+
+@app.get("/conversations")
+def list_conversations(current_user: dict = Depends(get_current_user)):
+    conversations = get_user_conversations(current_user["id"])
+    return conversations
+
+@app.get("/conversations/{conversation_id}/messages")
+def get_messages(conversation_id: int, current_user: dict = Depends(get_current_user)):
+    messages = get_conversation_messages(conversation_id)
+    return messages
+
+@app.post("/conversations/{conversation_id}/messages")
+def add_new_message(conversation_id: int, req: MessageAddRequest, current_user: dict = Depends(get_current_user)):
+    add_message(conversation_id, req.role, req.content)
+    return {"message": "Message added"}
+
+@app.delete("/conversations/{conversation_id}")
+def delete_conv(conversation_id: int, current_user: dict = Depends(get_current_user)):
+    success = delete_conversation(conversation_id, current_user["id"])
+    if not success:
+        raise HTTPException(status_code=404, detail="Conversation not found or not owned by you")
+    return {"message": "Conversation deleted"}
 
 # ==========================================
 # SESSION FUNCTIONS (Living directly in main.py)
@@ -526,6 +611,84 @@ def get_session_quiz_history(session_id: int):
 # ==========================================
 # RUN THE SERVER
 # ==========================================
+# ==========================================
+# CHAT HISTORY FUNCTIONS
+# ==========================================
+def create_conversation(user_id: int, book_id: int, title: str) -> int:
+    conn = sqlite3.connect("sa_study_app.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO conversations (user_id, book_id, title) VALUES (?, ?, ?)",
+        (user_id, book_id, title)
+    )
+    conv_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return conv_id
+
+def get_user_conversations(user_id: int):
+    conn = sqlite3.connect("sa_study_app.db")
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT c.*, b.title as book_title 
+        FROM conversations c
+        LEFT JOIN books b ON c.book_id = b.id
+        WHERE c.user_id = ?
+        ORDER BY c.updated_at DESC
+    """, (user_id,))
+    conversations = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in conversations]
+
+def get_conversation_messages(conversation_id: int):
+    conn = sqlite3.connect("sa_study_app.db")
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT * FROM messages
+        WHERE conversation_id = ?
+        ORDER BY created_at ASC
+    """, (conversation_id,))
+    messages = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in messages]
+
+def add_message(conversation_id: int, role: str, content: str):
+    conn = sqlite3.connect("sa_study_app.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO messages (conversation_id, role, content) VALUES (?, ?, ?)",
+        (conversation_id, role, content)
+    )
+    # Update the conversation's updated_at timestamp
+    cursor.execute(
+        "UPDATE conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (conversation_id,)
+    )
+    conn.commit()
+    conn.close()
+
+def delete_conversation(conversation_id: int, user_id: int) -> bool:
+    conn = sqlite3.connect("sa_study_app.db")
+    cursor = conn.cursor()
+    # Verify ownership
+    cursor.execute(
+        "SELECT user_id FROM conversations WHERE id = ?",
+        (conversation_id,)
+    )
+    conv = cursor.fetchone()
+    if not conv or conv[0] != user_id:
+        conn.close()
+        return False
+    
+    # Delete messages first
+    cursor.execute("DELETE FROM messages WHERE conversation_id = ?", (conversation_id,))
+    # Delete conversation
+    cursor.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
+    conn.commit()
+    conn.close()
+    return True
 if __name__ == "__main__":
     import uvicorn
     print("\n🚀 Starting SA Study App API server...")
