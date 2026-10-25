@@ -286,7 +286,7 @@ def generate_quiz(req: QuizGenerateRequest, current_user: dict = Depends(get_cur
 
         # 4. Setup LLM
         print(f"🤖 [QUIZ] Calling OpenAI to generate {req.num_questions} questions...")
-        llm = ChatOpenAI(temperature=0.5, model="gpt-3.5-turbo")
+      llm = ChatOpenAI(temperature=0.5, model="gpt-3.5-turbo")
 
         # 5. Prompt for Mixed Questions
         prompt = f"""You are an expert teacher. Based ONLY on the context below, generate {req.num_questions} questions.
@@ -328,7 +328,7 @@ def generate_quiz(req: QuizGenerateRequest, current_user: dict = Depends(get_cur
 @app.post("/grade-quiz")
 def grade_quiz(req: QuizGradeRequest, current_user: dict = Depends(get_current_user)):
     try:
-        llm = ChatOpenAI(temperature=0.2, model="gpt-3.5-turbo")
+       llm = ChatOpenAI(temperature=0.2, model="gpt-4o-mini")
 
         prompt = f"""You are an expert teacher grading a quiz. 
         Here are the original questions and the student's answers.
