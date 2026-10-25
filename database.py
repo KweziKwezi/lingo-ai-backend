@@ -37,6 +37,14 @@ def get_user_by_email(email: str):
     conn.close()
     return dict(user) if user else None
 
+def get_user_by_id(user_id: int):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+    user = cursor.fetchone()
+    conn.close()
+    return dict(user) if user else None
+
 def add_book(title: str, grade: str, subject: str, filename: str, file_path: str, total_chunks: int, user_id: int, type: str) -> int:
     conn = get_db_connection()
     cursor = conn.cursor()
