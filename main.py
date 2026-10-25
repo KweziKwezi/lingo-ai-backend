@@ -1,4 +1,3 @@
-   # FORCE GIT UPDATE
 import os
 import shutil
 import json
@@ -104,8 +103,14 @@ class QuizGradeRequest(BaseModel):
 def extract_json_from_llm(text: str):
     text = re.sub(r'^```json\s*', '', text)
     text = re.sub(r'\s*```$', '', text)
-    start = text.find('[')
-    end = text.rfind(']')
+    start = text.find('{') # Look for object start first
+    end = text.rfind('}')
+    
+    # Fallback to array if no object found
+    if start == -1 or end == -1:
+        start = text.find('[')
+        end = text.rfind(']')
+        
     if start != -1 and end != -1:
         return json.loads(text[start:end+1])
     return json.loads(text)
@@ -335,7 +340,8 @@ def generate_quiz(req: QuizGenerateRequest, current_user: dict = Depends(get_cur
 @app.post("/grade-quiz")
 def grade_quiz(req: QuizGradeRequest, current_user: dict = Depends(get_current_user)):
     try:
-        llm = ChatOpenAI(temperature=0.2, model="gpt-4o-mini")
+        # Lower temperature for strict, predictable JSON formatting
+        llm = ChatOpenAI(temperature=0.1, model="gpt-4o-mini")
 
         prompt = f"""You are an expert teacher grading a quiz. 
         Here are the original questions and the student's answers.
@@ -346,33 +352,46 @@ def grade_quiz(req: QuizGradeRequest, current_user: dict = Depends(get_current_u
         Grade the student's work. For MCQs, check if the index matches 'correct_answer'. 
         For short/long answers, compare their answer to the 'model_answer' and award partial marks if they are close. If the student left an answer blank, award 0 marks and note it.
 
-        Output ONLY a valid JSON object with this EXACT structure:
+        Output ONLY a valid JSON OBJECT (starting with {{ and ending with }}), NOT a list. It must have this EXACT structure:
         {{
-          "total_score": integer,
-          "max_score": integer,
+          "total_score": 0,
+          "max_score": 0,
           "graded_questions": [
             {{
-              "id": integer,
-              "is_correct": boolean,
-              "awarded_marks": integer,
-              "feedback": "string explaining why it is right or wrong, be encouraging"
+              "id": 1,
+              "is_correct": true,
+              "awarded_marks": 1,
+              "feedback": "Great job!"
             }}
           ]
         }}
-        Do NOT wrap the output in ```json ... ``` markdown blocks."""
+        Do NOT wrap the output in ```json ... ``` markdown blocks. Just output the raw JSON object."""
 
         response = llm.invoke(prompt)
-        parsed_data = extract_json_from_llm(response.content)
+        raw_content = response.content
+        
+        # LOGGING: Let's see exactly what the AI returned
+        print(f"🤖 [GRADE] Raw AI Response (first 500 chars): {raw_content[:500]}")
+        
+        parsed_data = extract_json_from_llm(raw_content)
+        
+        print(f"📦 [GRADE] Parsed Data Type: {type(parsed_data)}")
+        if isinstance(parsed_data, dict):
+            print(f"📦 [GRADE] Parsed Data Keys: {list(parsed_data.keys())}")
+        else:
+            print(f"❌ [GRADE] Parsed data is NOT a dict. It is: {parsed_data}")
         
         if not isinstance(parsed_data, dict) or "graded_questions" not in parsed_data:
-            raise ValueError("AI returned invalid grading structure")
+            print(f"❌ [GRADE] Invalid structure. Full parsed data: {parsed_data}")
+            raise ValueError(f"AI returned invalid grading structure. Got type: {type(parsed_data)}")
             
         return parsed_data
         
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as e:
+        print(f"❌ [GRADE] JSON Decode Error. Raw content: {raw_content}")
         raise HTTPException(status_code=500, detail="AI failed to generate valid JSON format for grading.")
     except Exception as e:
-        print(f"❌ [GRADE] Error: {str(e)}")
+        print(f"❌ [GRADE] Critical Error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Grading failed: {str(e)}")
 
 # ==========================================
