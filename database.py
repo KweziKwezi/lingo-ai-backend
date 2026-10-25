@@ -1,3 +1,4 @@
+   # FORCE GIT UPDATE - SESSION TABLES
 import sqlite3
 import os
 
