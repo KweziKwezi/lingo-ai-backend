@@ -17,31 +17,30 @@ def init_database():
     cursor = conn.cursor()
     
     # Create users table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
+     cursor.execute("""
+        CREATE TABLE IF NOT EXISTS sessions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT UNIQUE NOT NULL,
-            password_hash TEXT,
-            name TEXT,
-            auth_provider TEXT DEFAULT 'local',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            user_id INTEGER NOT NULL,
+            book_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id),
+            FOREIGN KEY (book_id) REFERENCES books(id)
         )
     """)
     
-    # Create books table with user_id foreign key
+    # Add quiz attempts table
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS books (
+        CREATE TABLE IF NOT EXISTS quiz_attempts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            grade TEXT,
-            subject TEXT,
-            filename TEXT NOT NULL,
-            file_path TEXT NOT NULL,
-            total_chunks INTEGER DEFAULT 0,
-            user_id INTEGER,
-            type TEXT DEFAULT 'textbook',
-            uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users (id)
+            session_id INTEGER NOT NULL,
+            questions TEXT NOT NULL,
+            user_answers TEXT NOT NULL,
+            results TEXT NOT NULL,
+            score INTEGER NOT NULL,
+            max_score INTEGER NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (session_id) REFERENCES sessions(id)
         )
     """)
     
@@ -153,6 +152,62 @@ def delete_book(book_id: int, user_id: int) -> bool:
     
     conn.close()
     return deleted
+
+    # ==========================================
+# SESSION MANAGEMENT (For Quiz History)
+# ==========================================
+
+def create_session(user_id: int, book_id: int, title: str) -> int:
+    """Create a new study session for a document."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO sessions (user_id, book_id, title, created_at)
+        VALUES (?, ?, ?, datetime('now'))
+    """, (user_id, book_id, title))
+    session_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return session_id
+
+def get_user_sessions(user_id: int):
+    """Get all study sessions for a user."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT s.*, b.title as book_title, b.subject, b.grade
+        FROM sessions s
+        JOIN books b ON s.book_id = b.id
+        WHERE s.user_id = ?
+        ORDER BY s.created_at DESC
+    """, (user_id,))
+    sessions = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in sessions]
+
+def save_quiz_attempt(session_id: int, questions: str, answers: str, results: str, score: int, max_score: int):
+    """Save a quiz attempt to history."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO quiz_attempts (session_id, questions, user_answers, results, score, max_score, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+    """, (session_id, questions, answers, results, score, max_score))
+    conn.commit()
+    conn.close()
+
+def get_session_quiz_history(session_id: int):
+    """Get all quiz attempts for a session."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT * FROM quiz_attempts
+        WHERE session_id = ?
+        ORDER BY created_at DESC
+    """, (session_id,))
+    attempts = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in attempts]
 
 # Initialize the database when this module is imported
 init_database()
