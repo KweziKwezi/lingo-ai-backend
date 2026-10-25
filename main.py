@@ -126,30 +126,36 @@ class QuizAttemptSaveRequest(BaseModel):
 # HELPER FUNCTIONS
 # ==========================================
 def extract_json_from_llm(text: str):
-    # Remove markdown code blocks if the LLM adds them
-    text = re.sub(r'^```json\s*', '', text)
-    text = re.sub(r'\s*```$', '', text)
+    # 1. Aggressively strip ANY markdown code blocks
+    text = re.sub(r'```(?:json)?\s*', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'\s*```', '', text)
     
-    # Try to find OBJECT first (for grading responses)
-    start = text.find('{')
-    end = text.rfind('}')
-    
-    # If no object found, try array (for quiz generation)
-    if start == -1 or end == -1:
-        start = text.find('[')
-        end = text.rfind(']')
+    # 2. Find the outermost array (preferred for quizzes)
+    start = text.find('[')
+    end = text.rfind(']')
     
     if start != -1 and end != -1:
         json_str = text[start:end+1]
-        try:
-            return json.loads(json_str)
-        except json.JSONDecodeError:
-            # If it still fails, try to clean it more aggressively
-            json_str = re.sub(r',\s*}', '}', json_str)
-            json_str = re.sub(r',\s*]', ']', json_str)
-            return json.loads(json_str)
+    else:
+        # Fallback to object (for grading)
+        start = text.find('{')
+        end = text.rfind('}')
+        json_str = text[start:end+1] if start != -1 and end != -1 else text
+        
+    # 3. Fix common LLM JSON formatting mistakes
+    json_str = json_str.replace('None', 'null')
+    json_str = json_str.replace('True', 'true')
+    json_str = json_str.replace('False', 'false')
+    json_str = re.sub(r',\s*}', '}', json_str) # Remove trailing commas in objects
+    json_str = re.sub(r',\s*]', ']', json_str) # Remove trailing commas in arrays
     
-    return json.loads(text)
+    # 4. Parse and log errors if it still fails
+    try:
+        return json.loads(json_str)
+    except json.JSONDecodeError as e:
+        print(f"❌ [JSON PARSE ERROR] Failed to parse. Raw snippet: {json_str[:300]}")
+        print(f"❌ [JSON PARSE ERROR] Details: {e}")
+        raise
 
 # ==========================================
 # BASIC ENDPOINTS
@@ -338,7 +344,7 @@ def generate_quiz(req: QuizGenerateRequest, current_user: dict = Depends(get_cur
         print(f"🤖 [QUIZ] Calling OpenAI to generate {req.num_questions} UNIQUE questions...")
         llm = ChatOpenAI(temperature=0.7, model="gpt-4o-mini")
 
-        prompt = f"""You are an expert teacher. Based ONLY on the context below, generate {req.num_questions} questions.
+               prompt = f"""You are an expert teacher. Based ONLY on the context below, generate {req.num_questions} questions.
         
         CRITICAL INSTRUCTION: These questions MUST BE UNIQUE and varied. Do not repeat the same questions. Focus on different facts, definitions, and concepts from the text each time.
         The questions MUST be a mix of these three types: "mcq", "short", and "long".
@@ -354,8 +360,7 @@ def generate_quiz(req: QuizGenerateRequest, current_user: dict = Depends(get_cur
         - "model_answer": string (The correct answer/explanation for grading short/long)
         - "marks": integer (1 for mcq/short, 3 for long)
 
-        Do NOT wrap the output in ```json ... ``` markdown blocks. Just output the raw JSON array."""
-
+        CRITICAL: Output ONLY the raw JSON array. Do NOT use markdown formatting (no ```json). Do NOT add any text, explanations, or greetings before or after the array."""
         response = llm.invoke(prompt)
         print("✅ [QUIZ] OpenAI responded. Parsing JSON...")
         
