@@ -1,23 +1,48 @@
 import sqlite3
-from typing import List, Dict, Optional
 import os
-from datetime import datetime
 
-DB_PATH = "./books.db"
+# Ensure the database file is in the current directory
+DB_PATH = "sa_study_app.db"
 
-def get_connection():
-    """Get a connection to the SQLite database."""
+def get_db_connection():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
-def init_database():
-    """Create the users and books tables if they don't exist."""
-    conn = get_connection()
+def init_db():
+    conn = get_db_connection()
     cursor = conn.cursor()
     
-    # Create users table
-     cursor.execute("""
+    # Users table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            name TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    # Books table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS books (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            grade TEXT NOT NULL,
+            subject TEXT NOT NULL,
+            filename TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            total_chunks INTEGER NOT NULL,
+            type TEXT NOT NULL,
+            uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+    """)
+
+    # Sessions table (NEW)
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
@@ -29,7 +54,7 @@ def init_database():
         )
     """)
     
-    # Add quiz attempts table
+    # Quiz attempts table (NEW)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS quiz_attempts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -46,124 +71,94 @@ def init_database():
     
     conn.commit()
     conn.close()
-    print("✅ Database initialized")
 
 # ==========================================
 # USER FUNCTIONS
 # ==========================================
-
-def create_user(email: str, password_hash: str, name: str, auth_provider: str = "local") -> int:
-    """Create a new user and return their ID."""
-    conn = get_connection()
+def create_user(email: str, password_hash: str, name: str) -> int:
+    conn = get_db_connection()
     cursor = conn.cursor()
-    
     try:
-        cursor.execute("""
-            INSERT INTO users (email, password_hash, name, auth_provider)
-            VALUES (?, ?, ?, ?)
-        """, (email, password_hash, name, auth_provider))
-        
-        user_id = cursor.lastrowid
+        cursor.execute(
+            "INSERT INTO users (email, password_hash, name) VALUES (?, ?, ?)",
+            (email, password_hash, name)
+        )
         conn.commit()
-        conn.close()
-        
+        user_id = cursor.lastrowid
         return user_id
     except sqlite3.IntegrityError:
+        return None
+    finally:
         conn.close()
-        return None  # Email already exists
 
-def get_user_by_email(email: str) -> Optional[Dict]:
-    """Get a user by email."""
-    conn = get_connection()
+def get_user_by_email(email: str):
+    conn = get_db_connection()
     cursor = conn.cursor()
-    
     cursor.execute("SELECT * FROM users WHERE email = ?", (email,))
-    row = cursor.fetchone()
-    
+    user = cursor.fetchone()
     conn.close()
-    return dict(row) if row else None
+    return dict(user) if user else None
 
-def get_user_by_id(user_id: int) -> Optional[Dict]:
-    """Get a user by ID."""
-    conn = get_connection()
+def get_user_by_id(user_id: int):
+    conn = get_db_connection()
     cursor = conn.cursor()
-    
     cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
-    row = cursor.fetchone()
-    
+    user = cursor.fetchone()
     conn.close()
-    return dict(row) if row else None
+    return dict(user) if user else None
 
 # ==========================================
 # BOOK FUNCTIONS
 # ==========================================
-
-def add_book(title: str, grade: str, subject: str, filename: str, file_path: str, 
-             total_chunks: int, user_id: int, type: str = "textbook") -> int:
-    """Add a new book to the database and return its ID."""
-    conn = get_connection()
+def add_book(title: str, grade: str, subject: str, filename: str, file_path: str, total_chunks: int, user_id: int, type: str) -> int:
+    conn = get_db_connection()
     cursor = conn.cursor()
-    
     cursor.execute("""
-        INSERT INTO books (title, grade, subject, filename, file_path, total_chunks, user_id, type)
+        INSERT INTO books (user_id, title, grade, subject, filename, file_path, total_chunks, type)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (title, grade, subject, filename, file_path, total_chunks, user_id, type))
-    
+    """, (user_id, title, grade, subject, filename, file_path, total_chunks, type))
     book_id = cursor.lastrowid
     conn.commit()
     conn.close()
-    
     return book_id
 
-def get_all_books(user_id: Optional[int] = None) -> List[Dict]:
-    """Get all books, optionally filtered by user."""
-    conn = get_connection()
+def get_all_books(user_id: int = None):
+    conn = get_db_connection()
     cursor = conn.cursor()
-    
     if user_id:
         cursor.execute("SELECT * FROM books WHERE user_id = ? ORDER BY uploaded_at DESC", (user_id,))
     else:
         cursor.execute("SELECT * FROM books ORDER BY uploaded_at DESC")
-    
-    books = [dict(row) for row in cursor.fetchall()]
-    
+    books = cursor.fetchall()
     conn.close()
-    return books
+    return [dict(book) for book in books]
 
-def get_book_by_id(book_id: int) -> Optional[Dict]:
-    """Get a specific book by ID."""
-    conn = get_connection()
+def get_book_by_id(book_id: int):
+    conn = get_db_connection()
     cursor = conn.cursor()
-    
     cursor.execute("SELECT * FROM books WHERE id = ?", (book_id,))
-    row = cursor.fetchone()
-    
+    book = cursor.fetchone()
     conn.close()
-    return dict(row) if row else None
+    return dict(book) if book else None
 
 def delete_book(book_id: int, user_id: int) -> bool:
-    """Delete a book from the database (only if owned by user)."""
-    conn = get_connection()
+    conn = get_db_connection()
     cursor = conn.cursor()
-    
     cursor.execute("DELETE FROM books WHERE id = ? AND user_id = ?", (book_id, user_id))
-    conn.commit()
     deleted = cursor.rowcount > 0
-    
+    conn.commit()
     conn.close()
     return deleted
 
-    # ==========================================
-# SESSION MANAGEMENT (For Quiz History)
 # ==========================================
-
+# SESSION & QUIZ HISTORY FUNCTIONS (NEW)
+# ==========================================
 def create_session(user_id: int, book_id: int, title: str) -> int:
-    """Create a new study session for a document."""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO sessions (user_id, book_id, title, created_at)
-        VALUES (?, ?, ?, datetime('now'))
+        INSERT INTO sessions (user_id, book_id, title)
+        VALUES (?, ?, ?)
     """, (user_id, book_id, title))
     session_id = cursor.lastrowid
     conn.commit()
@@ -171,7 +166,6 @@ def create_session(user_id: int, book_id: int, title: str) -> int:
     return session_id
 
 def get_user_sessions(user_id: int):
-    """Get all study sessions for a user."""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
@@ -186,18 +180,16 @@ def get_user_sessions(user_id: int):
     return [dict(row) for row in sessions]
 
 def save_quiz_attempt(session_id: int, questions: str, answers: str, results: str, score: int, max_score: int):
-    """Save a quiz attempt to history."""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO quiz_attempts (session_id, questions, user_answers, results, score, max_score, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+        INSERT INTO quiz_attempts (session_id, questions, user_answers, results, score, max_score)
+        VALUES (?, ?, ?, ?, ?, ?)
     """, (session_id, questions, answers, results, score, max_score))
     conn.commit()
     conn.close()
 
 def get_session_quiz_history(session_id: int):
-    """Get all quiz attempts for a session."""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
@@ -209,5 +201,5 @@ def get_session_quiz_history(session_id: int):
     conn.close()
     return [dict(row) for row in attempts]
 
-# Initialize the database when this module is imported
-init_database()
+# Initialize the database when the module is imported
+init_db()
