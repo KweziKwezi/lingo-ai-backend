@@ -66,6 +66,26 @@ def ensure_chat_tables():
     conn.close()
 
 ensure_chat_tables()
+# Ensure public library schema exists
+def ensure_public_library_schema():
+    conn = sqlite3.connect("sa_study_app.db")
+    cursor = conn.cursor()
+    try:
+        cursor.execute("ALTER TABLE books ADD COLUMN is_public BOOLEAN DEFAULT 0")
+        cursor.execute("ALTER TABLE books ADD COLUMN admin_user_id INTEGER")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass # Columns already exist
+    conn.close()
+
+ensure_public_library_schema()
+# Admin Security Check
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@lingoai.co.za")
+
+def get_current_admin(current_user: dict = Depends(get_current_user)):
+    if current_user["email"] != ADMIN_EMAIL:
+        raise HTTPException(status_code=403, detail="Not authorized as admin")
+    return current_user
 
 # Create uploads folder if it doesn't exist
 if not os.path.exists("uploads"):
@@ -689,6 +709,103 @@ def delete_conversation(conversation_id: int, user_id: int) -> bool:
     conn.commit()
     conn.close()
     return True
+    # ==========================================
+# ADMIN & PUBLIC LIBRARY ENDPOINTS
+# ==========================================
+
+@app.post("/admin/upload-library")
+async def upload_library_book(
+    file: UploadFile = File(...),
+    title: str = Form(...),
+    grade: str = Form(...),
+    subject: str = Form(...),
+    type: str = Form(default="textbook"),
+    current_user: dict = Depends(get_current_admin)
+):
+    """Admin only: Upload a book to the public library."""
+    if not (file.filename.endswith(".pdf") or file.filename.endswith(".pptx")):
+        raise HTTPException(status_code=400, detail="Only PDF and PPTX files are allowed")
+
+    file_path = os.path.join("uploads", file.filename)
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    try:
+        print(f"\n🚀 [ADMIN] Starting public ingestion for: {title}...")
+        book_id = ingest_textbook(
+            file_path=file_path,
+            title=title,
+            grade=grade,
+            subject=subject,
+            user_id=current_user["id"],
+            type=type
+        )
+        
+        # Mark the book as public in the database
+        conn = sqlite3.connect("sa_study_app.db")
+        cursor = conn.cursor()
+        cursor.execute("UPDATE books SET is_public = 1, admin_user_id = ? WHERE id = ?", (current_user["id"], book_id))
+        conn.commit()
+        conn.close()
+        
+        return {"message": "Book successfully added to the Public Library!", "book_id": book_id}
+    except Exception as e:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        raise HTTPException(status_code=500, detail=f"Failed to process file: {str(e)}")
+
+
+@app.get("/library")
+def get_public_library():
+    """Get all books available in the public library."""
+    conn = sqlite3.connect("sa_study_app.db")
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM books WHERE is_public = 1 ORDER BY uploaded_at DESC")
+    books = cursor.fetchall()
+    conn.close()
+    return [dict(b) for b in books]
+
+
+@app.get("/library/{book_id}/content")
+def get_book_content(book_id: int):
+    """Get the text chunks of a public book for the reader."""
+    # 1. Verify the book is public
+    conn = sqlite3.connect("sa_study_app.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT is_public FROM books WHERE id = ?", (book_id,))
+    book = cursor.fetchone()
+    conn.close()
+    
+    if not book or not book[0]:
+        raise HTTPException(status_code=404, detail="Book not found or not public")
+
+    # 2. Fetch all chunks from ChromaDB
+    try:
+        embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+        vectorstore = Chroma(persist_directory="./sa_textbook_db", embedding_function=embeddings)
+        
+        # Access the underlying collection to get all documents for this book
+        collection = vectorstore._collection
+        
+        results = collection.get(
+            where={"book_id": str(book_id)},
+            include=["documents", "metadatas"]
+        )
+        
+        chunks = []
+        if results and results['documents']:
+            # Zip documents and metadatas together
+            zipped = list(zip(results['documents'], results['metadatas']))
+            # Sort by chunk_index to ensure pages are in the correct order
+            zipped.sort(key=lambda x: int(x[1].get('chunk_index', 0)))
+            
+            chunks = [{"text": doc, "metadata": meta} for doc, meta in zipped]
+            
+        return {"chunks": chunks}
+    except Exception as e:
+        print(f"❌ [LIBRARY] Error fetching content: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load book content")
 if __name__ == "__main__":
     import uvicorn
     print("\n🚀 Starting SA Study App API server...")
