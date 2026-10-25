@@ -115,3 +115,5 @@ def get_session_quiz_history(session_id: int):
     return [dict(row) for row in attempts]
 
 init_db()
+
+# THIS IS A FORCED CHANGE TO MAKE GIT WORK
