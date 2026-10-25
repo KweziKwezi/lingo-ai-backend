@@ -296,45 +296,28 @@ def generate_quiz(req: QuizGenerateRequest, current_user: dict = Depends(get_cur
 
         context = "\n\n".join([doc.page_content for doc in docs])
 
-        # 5. Setup LLM
-        print(f"🤖 [QUIZ] Calling OpenAI to generate {req.num_questions} questions...")
-        llm = ChatOpenAI(temperature=0.5, model="gpt-4o-mini")
+                # 5. Setup LLM (Increased temperature for variety)
+        print(f"🤖 [QUIZ] Calling OpenAI to generate {req.num_questions} UNIQUE questions...")
+        llm = ChatOpenAI(temperature=0.7, model="gpt-4o-mini")
 
-        # 6. Prompt for Mixed Questions
+        # 6. Prompt for Mixed, VARIED Questions
         prompt = f"""You are an expert teacher. Based ONLY on the context below, generate {req.num_questions} questions.
-The questions MUST be a mix of these three types: "mcq", "short", and "long".
-
-Context: {context}
-
-Output ONLY a valid JSON array of objects. Each object must have:
-- "id": integer (1 to {req.num_questions})
-- "type": string ("mcq", "short", or "long")
-- "question": string
-- "options": array of 4 strings (ONLY for "mcq", else null)
-- "correct_answer": integer 0-3 (ONLY for "mcq", else null)
-- "model_answer": string (The correct answer/explanation for grading short/long)
-- "marks": integer (1 for mcq/short, 3 for long)
-
-Do NOT wrap the output in ```json ... ``` markdown blocks. Just output the raw JSON array."""
-
-        response = llm.invoke(prompt)
-        print("✅ [QUIZ] OpenAI responded. Parsing JSON...")
         
-        parsed_data = extract_json_from_llm(response.content)
-        print("✅ [QUIZ] Quiz generated successfully!")
-        return {"questions": parsed_data}
-        
-    except json.JSONDecodeError as e:
-        print(f"❌ [QUIZ] JSON Decode Error: {e}")
-        raise HTTPException(status_code=500, detail="AI failed to generate valid JSON format.")
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"❌ [QUIZ] CRITICAL ERROR: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+        CRITICAL INSTRUCTION: These questions MUST BE UNIQUE and varied. Do not repeat the same questions. Focus on different facts, definitions, and concepts from the text each time.
+        The questions MUST be a mix of these three types: "mcq", "short", and "long".
 
+        Context: {context}
+
+        Output ONLY a valid JSON array of objects. Each object must have:
+        - "id": integer (1 to {req.num_questions})
+        - "type": string ("mcq", "short", or "long")
+        - "question": string
+        - "options": array of 4 strings (ONLY for "mcq", else null)
+        - "correct_answer": integer 0-3 (ONLY for "mcq", else null)
+        - "model_answer": string (The correct answer/explanation for grading short/long)
+        - "marks": integer (1 for mcq/short, 3 for long)
+
+        Do NOT wrap the output in ```json ... ``` markdown blocks. Just output the raw JSON array."""
 
 @app.post("/grade-quiz")
 def grade_quiz(req: QuizGradeRequest, current_user: dict = Depends(get_current_user)):
@@ -342,38 +325,43 @@ def grade_quiz(req: QuizGradeRequest, current_user: dict = Depends(get_current_u
         llm = ChatOpenAI(temperature=0.2, model="gpt-4o-mini")
 
         prompt = f"""You are an expert teacher grading a quiz. 
-Here are the original questions and the student's answers.
+        Here are the original questions and the student's answers.
+        
+        Questions: {json.dumps(req.questions)}
+        Student Answers: {json.dumps(req.user_answers)}
 
-Questions: {json.dumps(req.questions)}
-Student Answers: {json.dumps(req.user_answers)}
+        Grade the student's work. For MCQs, check if the index matches 'correct_answer'. 
+        For short/long answers, compare their answer to the 'model_answer' and award partial marks if they are close. If the student left an answer blank, award 0 marks and note it.
 
-Grade the student's work. For MCQs, check if the index matches 'correct_answer'. 
-For short/long answers, compare their answer to the 'model_answer' and award partial marks if they are close.
-
-Output ONLY a valid JSON object with this exact structure:
-{{
-  "total_score": integer,
-  "max_score": integer,
-  "graded_questions": [
-    {{
-      "id": integer,
-      "is_correct": boolean,
-      "awarded_marks": integer,
-      "feedback": string (Explain why it's right or wrong, be encouraging)
-    }}
-  ]
-}}
-Do NOT wrap the output in ```json ... ``` markdown blocks."""
+        Output ONLY a valid JSON object with this EXACT structure:
+        {{
+          "total_score": integer,
+          "max_score": integer,
+          "graded_questions": [
+            {{
+              "id": integer,
+              "is_correct": boolean,
+              "awarded_marks": integer,
+              "feedback": "string explaining why it is right or wrong, be encouraging"
+            }}
+          ]
+        }}
+        Do NOT wrap the output in ```json ... ``` markdown blocks."""
 
         response = llm.invoke(prompt)
         parsed_data = extract_json_from_llm(response.content)
+        
+        # Safety check: ensure graded_questions exists
+        if not isinstance(parsed_data, dict) or "graded_questions" not in parsed_data:
+            raise ValueError("AI returned invalid grading structure")
+            
         return parsed_data
         
     except json.JSONDecodeError:
         raise HTTPException(status_code=500, detail="AI failed to generate valid JSON format for grading.")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
+        print(f"❌ [GRADE] Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Grading failed: {str(e)}")
 # ==========================================
 # RUN THE SERVER
 # ==========================================
