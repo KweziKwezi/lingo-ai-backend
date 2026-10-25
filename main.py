@@ -6,7 +6,10 @@ from fastapi.security import HTTPBearer
 from pydantic import BaseModel, EmailStr
 from typing import Optional, List
 from dotenv import load_dotenv
-
+import json
+import re
+from pydantic import BaseModel
+from langchain_openai import ChatOpenAI
 from hybrid_tutor import hybrid_tutor
 from ingest_textbook import ingest_textbook
 from database import (
@@ -285,7 +288,71 @@ def ask_question(request: QuestionRequest, current_user: dict = Depends(get_curr
     except Exception as e:
         print(f"❌ Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+# --- Quiz & Flashcard Models ---
+class StudyMaterialRequest(BaseModel):
+    topic: str = ""
+    language: str = "English"
+    book_id: int = None
+    type: str = "quiz"  # "quiz" or "flashcard"
+    num_items: int = 5
 
+@app.post("/generate-study-material")
+def generate_study_material(req: StudyMaterialRequest, current_user: dict = Depends(get_current_user)):
+    # 1. Get Context from ChromaDB (similar to /ask endpoint)
+    context = ""
+    if req.book_id:
+        # Find the book in DB to get its Chroma collection name/path
+        # (Assuming you have a db helper like get_book_by_id)
+        book = db.get_book(req.book_id) 
+        if book:
+            # Load the vector store for this book
+            vectorstore = Chroma(persist_directory=f"chroma_db/{book['id']}", embedding_function=embeddings)
+            retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
+            docs = retriever.get_relevant_documents(req.topic if req.topic else "main concepts")
+            context = "\n\n".join([doc.page_content for doc in docs])
+
+    # 2. Setup the LLM
+    llm = ChatOpenAI(temperature=0.7, model="gpt-3.5-turbo")
+
+    # 3. Create the Prompt
+    if req.type == "quiz":
+        prompt = f"""You are an expert teacher. Generate {req.num_items} multiple-choice questions about "{req.topic}" based on the context below. 
+        Translate everything into {req.language}.
+        
+        Context: {context}
+        
+        Output ONLY a valid JSON array of objects. Each object must have:
+        - "question": string
+        - "options": array of 4 strings
+        - "correct_answer": integer (0, 1, 2, or 3 representing the index of the correct option)
+        - "explanation": string
+        
+        Do NOT wrap the output in ```json ... ``` markdown blocks. Just output the raw JSON array."""
+    else: # flashcard
+        prompt = f"""You are an expert teacher. Generate {req.num_items} flashcards about "{req.topic}" based on the context below.
+        Translate everything into {req.language}.
+        
+        Context: {context}
+        
+        Output ONLY a valid JSON array of objects. Each object must have:
+        - "term": string
+        - "definition": string
+        
+        Do NOT wrap the output in ```json ... ``` markdown blocks. Just output the raw JSON array."""
+
+    # 4. Call OpenAI
+    response = llm.invoke(prompt)
+    raw_text = response.content
+
+    # 5. Clean and Parse JSON (LLMs sometimes add markdown blocks anyway)
+    raw_text = re.sub(r'^```json\s*', '', raw_text)
+    raw_text = re.sub(r'\s*```$', '', raw_text)
+    
+    try:
+        parsed_data = json.loads(raw_text)
+        return {"data": parsed_data, "type": req.type}
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail="AI failed to generate valid JSON. Please try again.")
 # ==========================================
 # RUN THE SERVER
 # ==========================================
