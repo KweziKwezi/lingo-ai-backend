@@ -16,10 +16,11 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 # Local imports
 from hybrid_tutor import hybrid_tutor
 from ingest_textbook import ingest_textbook
+import sqlite3
+
 from database import (
     get_all_books, get_book_by_id, delete_book,
-    create_user, get_user_by_email, get_user_by_id,
-    create_session, get_user_sessions, save_quiz_attempt, get_session_quiz_history
+    create_user, get_user_by_email, get_user_by_id
 )
 from auth import (
     verify_password, get_password_hash, create_access_token,
@@ -27,6 +28,17 @@ from auth import (
 )
 
 load_dotenv()
+
+# Ensure new tables exist (Bypassing database.py)
+def ensure_new_tables():
+    conn = sqlite3.connect("sa_study_app.db")
+    cursor = conn.cursor()
+    cursor.execute("CREATE TABLE IF NOT EXISTS sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, book_id INTEGER NOT NULL, title TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS quiz_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id INTEGER NOT NULL, questions TEXT NOT NULL, user_answers TEXT NOT NULL, results TEXT NOT NULL, score INTEGER NOT NULL, max_score INTEGER NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
+    conn.commit()
+    conn.close()
+
+ensure_new_tables()
 
 # Create uploads folder if it doesn't exist
 if not os.path.exists("uploads"):
@@ -518,6 +530,42 @@ def save_quiz_attempt_endpoint(session_id: int, req: QuizAttemptSaveRequest, cur
 # ==========================================
 # RUN THE SERVER
 # ==========================================
+# ==========================================
+# SESSION FUNCTIONS (Living directly in main.py)
+# ==========================================
+def create_session(user_id: int, book_id: int, title: str) -> int:
+    conn = sqlite3.connect("sa_study_app.db")
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO sessions (user_id, book_id, title) VALUES (?, ?, ?)", (user_id, book_id, title))
+    session_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return session_id
+
+def get_user_sessions(user_id: int):
+    conn = sqlite3.connect("sa_study_app.db")
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("SELECT s.*, b.title as book_title, b.subject, b.grade FROM sessions s JOIN books b ON s.book_id = b.id WHERE s.user_id = ? ORDER BY s.created_at DESC", (user_id,))
+    sessions = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in sessions]
+
+def save_quiz_attempt(session_id: int, questions: str, answers: str, results: str, score: int, max_score: int):
+    conn = sqlite3.connect("sa_study_app.db")
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO quiz_attempts (session_id, questions, user_answers, results, score, max_score) VALUES (?, ?, ?, ?, ?, ?)", (session_id, questions, answers, results, score, max_score))
+    conn.commit()
+    conn.close()
+
+def get_session_quiz_history(session_id: int):
+    conn = sqlite3.connect("sa_study_app.db")
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM quiz_attempts WHERE session_id = ? ORDER BY created_at DESC", (session_id,))
+    attempts = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in attempts]
 if __name__ == "__main__":
     import uvicorn
     print("\n🚀 Starting SA Study App API server...")
