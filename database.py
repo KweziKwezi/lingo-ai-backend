@@ -1,4 +1,5 @@
-﻿import sqlite3
+﻿   # FINAL FIX FOR SESSIONS
+import sqlite3
 import os
 
 DB_PATH = "sa_study_app.db"
@@ -135,12 +136,14 @@ def delete_book(book_id: int, user_id: int) -> bool:
 def create_session(user_id: int, book_id: int, title: str) -> int:
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("INSERT INTO sessions (user_id, book_id, title) VALUES (?, ?, ?)", (user_id, book_id, title))
+    cursor.execute("""
+        INSERT INTO sessions (user_id, book_id, title)
+        VALUES (?, ?, ?)
+    """, (user_id, book_id, title))
     session_id = cursor.lastrowid
     conn.commit()
     conn.close()
     return session_id
-
 def get_user_sessions(user_id: int):
     conn = get_db_connection()
     cursor = conn.cursor()
