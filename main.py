@@ -95,7 +95,7 @@ class QuizGenerateRequest(BaseModel):
 
 class QuizGradeRequest(BaseModel):
     questions: list
-    user_answers: list
+    user_answers: dict  # Changed to dict to match the frontend object
 
 # ==========================================
 # HELPER FUNCTIONS
