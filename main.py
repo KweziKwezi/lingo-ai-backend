@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
 from dotenv import load_dotenv
 
-# LangChain imports for Quiz generation
+# LangChain imports
 from langchain_chroma import Chroma
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
@@ -479,13 +479,13 @@ def get_public_library():
     books = cursor.fetchall()
     conn.close()
     return [dict(b) for b in books]
-    @app.delete("/admin/library/{book_id}")
+
+@app.delete("/admin/library/{book_id}")
 def delete_library_book(book_id: int, current_user: dict = Depends(get_current_admin)):
     """Admin only: Delete a book from the public library, ChromaDB, and disk."""
     conn = sqlite3.connect("sa_study_app.db")
     cursor = conn.cursor()
     
-    # 1. Get file path to delete physical file later
     cursor.execute("SELECT file_path FROM books WHERE id = ? AND is_public = 1", (book_id,))
     book = cursor.fetchone()
     
@@ -495,7 +495,6 @@ def delete_library_book(book_id: int, current_user: dict = Depends(get_current_a
         
     file_path = book[0]
     
-    # 2. Delete vectors from ChromaDB
     try:
         embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
         db = Chroma(persist_directory="./sa_textbook_db", embedding_function=embeddings)
@@ -504,15 +503,11 @@ def delete_library_book(book_id: int, current_user: dict = Depends(get_current_a
     except Exception as e:
         print(f"⚠️ Warning: Could not delete from ChromaDB: {e}")
         
-    # 3. Delete from page_texts
     cursor.execute("DELETE FROM page_texts WHERE book_id = ?", (book_id,))
-    
-    # 4. Delete from books table
     cursor.execute("DELETE FROM books WHERE id = ?", (book_id,))
     conn.commit()
     conn.close()
     
-    # 5. Delete physical file from server
     if os.path.exists(file_path):
         os.remove(file_path)
         
@@ -594,7 +589,7 @@ def translate_text(req: TranslationRequest, current_user: dict = Depends(get_cur
         raise HTTPException(status_code=500, detail=f"Translation failed: {str(e)}")
 
 # ==========================================
-# DATABASE HELPER FUNCTIONS (Inlined for reliability)
+# DATABASE HELPER FUNCTIONS
 # ==========================================
 def create_session(user_id: int, book_id: int, title: str) -> int:
     conn = sqlite3.connect("sa_study_app.db")
