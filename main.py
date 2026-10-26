@@ -60,21 +60,6 @@ def ensure_public_library_schema():
         pass
     conn.close()
 ensure_public_library_schema()
-def ensure_past_papers_schema():
-    conn = sqlite3.connect("sa_study_app.db")
-    cursor = conn.cursor()
-    try:
-        cursor.execute("ALTER TABLE books ADD COLUMN is_past_paper BOOLEAN DEFAULT 0")
-        cursor.execute("ALTER TABLE books ADD COLUMN institution_type TEXT") # 'High School' or 'University'
-        cursor.execute("ALTER TABLE books ADD COLUMN institution_name TEXT")
-        cursor.execute("ALTER TABLE books ADD COLUMN module_code TEXT")
-        cursor.execute("ALTER TABLE books ADD COLUMN year INTEGER")
-        conn.commit()
-    except sqlite3.OperationalError:
-        pass # Columns already exist
-    conn.close()
-
-ensure_past_papers_schema()
 
 def ensure_page_text_schema():
     conn = sqlite3.connect("sa_study_app.db")
@@ -83,6 +68,21 @@ def ensure_page_text_schema():
     conn.commit()
     conn.close()
 ensure_page_text_schema()
+
+def ensure_past_papers_schema():
+    conn = sqlite3.connect("sa_study_app.db")
+    cursor = conn.cursor()
+    try:
+        cursor.execute("ALTER TABLE books ADD COLUMN is_past_paper BOOLEAN DEFAULT 0")
+        cursor.execute("ALTER TABLE books ADD COLUMN institution_type TEXT")
+        cursor.execute("ALTER TABLE books ADD COLUMN institution_name TEXT")
+        cursor.execute("ALTER TABLE books ADD COLUMN module_code TEXT")
+        cursor.execute("ALTER TABLE books ADD COLUMN year INTEGER")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+    conn.close()
+ensure_past_papers_schema()
 
 # Admin Security Check
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@lingoai.co.za")
@@ -497,7 +497,6 @@ def get_public_library():
 
 @app.delete("/admin/library/{book_id}")
 def delete_library_book(book_id: int, current_user: dict = Depends(get_current_admin)):
-    """Admin only: Delete a book from the public library, ChromaDB, and disk."""
     conn = sqlite3.connect("sa_study_app.db")
     cursor = conn.cursor()
     
@@ -584,10 +583,14 @@ def get_page_text(book_id: int, page_num: int):
     row = cursor.fetchone()
     conn.close()
     return {"text": row[0]} if row else {"text": ""}
-    @app.post("/admin/upload-past-paper")
+
+# ==========================================
+# PAST PAPERS ENDPOINTS
+# ==========================================
+@app.post("/admin/upload-past-paper")
 async def upload_past_paper(
     file: UploadFile = File(...),
-    institution_type: str = Form(...), # 'High School' or 'University'
+    institution_type: str = Form(...),
     institution_name: str = Form(...),
     subject_or_module: str = Form(...),
     module_code: str = Form(default=""),
@@ -602,7 +605,6 @@ async def upload_past_paper(
         shutil.copyfileobj(file.file, buffer)
 
     try:
-        # Ingest it just like a textbook so it gets chunked for translation & AI chat
         book_id = ingest_textbook(
             file_path=file_path, 
             title=f"{subject_or_module} {year}", 
@@ -612,7 +614,6 @@ async def upload_past_paper(
             type="past_paper"
         )
         
-        # Update with past paper specific metadata
         conn = sqlite3.connect("sa_study_app.db")
         cursor = conn.cursor()
         cursor.execute("""
@@ -638,7 +639,6 @@ def get_past_papers(
     institution_type: Optional[str] = None,
     year: Optional[int] = None
 ):
-    """Get past papers with optional filters."""
     conn = sqlite3.connect("sa_study_app.db")
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
@@ -662,7 +662,6 @@ def get_past_papers(
 
 @app.get("/past-papers/{book_id}/download")
 def download_past_paper(book_id: int):
-    """Force download the past paper PDF."""
     conn = sqlite3.connect("sa_study_app.db")
     cursor = conn.cursor()
     cursor.execute("SELECT file_path, is_past_paper FROM books WHERE id = ?", (book_id,))
@@ -674,16 +673,17 @@ def download_past_paper(book_id: int):
     if not os.path.exists(book['file_path']):
         raise HTTPException(status_code=404, detail="File missing on server")
         
-    # media_type='application/pdf' with filename forces browser to download
     return FileResponse(
         book['file_path'], 
         media_type="application/pdf",
         filename=os.path.basename(book['file_path'])
     )
 
+# ==========================================
+# TRANSLATION ENDPOINT
+# ==========================================
 @app.post("/translate")
 def translate_text(req: TranslationRequest, current_user: dict = Depends(get_current_user)):
-    """Translate a single chunk of text to save API credits."""
     try:
         llm = ChatOpenAI(temperature=0.0, model="gpt-4o-mini")
         prompt = f"""You are an expert translator. Translate the following text into {req.target_language}. 
