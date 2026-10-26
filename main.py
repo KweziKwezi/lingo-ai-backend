@@ -479,6 +479,44 @@ def get_public_library():
     books = cursor.fetchall()
     conn.close()
     return [dict(b) for b in books]
+    @app.delete("/admin/library/{book_id}")
+def delete_library_book(book_id: int, current_user: dict = Depends(get_current_admin)):
+    """Admin only: Delete a book from the public library, ChromaDB, and disk."""
+    conn = sqlite3.connect("sa_study_app.db")
+    cursor = conn.cursor()
+    
+    # 1. Get file path to delete physical file later
+    cursor.execute("SELECT file_path FROM books WHERE id = ? AND is_public = 1", (book_id,))
+    book = cursor.fetchone()
+    
+    if not book:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Public book not found")
+        
+    file_path = book[0]
+    
+    # 2. Delete vectors from ChromaDB
+    try:
+        embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+        db = Chroma(persist_directory="./sa_textbook_db", embedding_function=embeddings)
+        collection = db._collection
+        collection.delete(where={"book_id": str(book_id)})
+    except Exception as e:
+        print(f"⚠️ Warning: Could not delete from ChromaDB: {e}")
+        
+    # 3. Delete from page_texts
+    cursor.execute("DELETE FROM page_texts WHERE book_id = ?", (book_id,))
+    
+    # 4. Delete from books table
+    cursor.execute("DELETE FROM books WHERE id = ?", (book_id,))
+    conn.commit()
+    conn.close()
+    
+    # 5. Delete physical file from server
+    if os.path.exists(file_path):
+        os.remove(file_path)
+        
+    return {"message": "Book successfully deleted from library"}
 
 @app.get("/library/{book_id}/content")
 def get_book_content(book_id: int):
