@@ -107,7 +107,21 @@ def ingest_textbook(file_path: str, title: str, grade: str, subject: str,
             "chunk_index": i,
             "page": int(page_num)
         })
+        # 3.5. Save text page-by-page into SQLite for the Reader
+    print("   💾 Saving page-by-page text for Reader...")
+    conn = sqlite3.connect("sa_study_app.db")
+    cursor = conn.cursor()
+    # Delete old page texts for this book if re-uploading
+    cursor.execute("DELETE FROM page_texts WHERE book_id = ?", (book_id,))
     
+    for doc in documents:
+        page_num = doc.metadata.get("page", 1)
+        cursor.execute(
+            "INSERT INTO page_texts (book_id, page_num, text_content) VALUES (?, ?, ?)",
+            (book_id, int(page_num), doc.page_content)
+        )
+    conn.commit()
+    conn.close()
     # 5. Add to ChromaDB
     print("   Embedding and storing in ChromaDB...")
     embeddings = OpenAIEmbeddings(model="text-embedding-3-small")

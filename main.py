@@ -4,7 +4,7 @@ import json
 import re
 import sqlite3
 from typing import Optional, List
-
+from fastapi.responses import FileResponse
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
@@ -79,6 +79,21 @@ def ensure_public_library_schema():
     conn.close()
 
 ensure_public_library_schema()
+def ensure_page_text_schema():
+    conn = sqlite3.connect("sa_study_app.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS page_texts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            book_id INTEGER NOT NULL,
+            page_num INTEGER NOT NULL,
+            text_content TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+ensure_page_text_schema()
 # Admin Security Check
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@lingoai.co.za")
 
@@ -818,6 +833,38 @@ def get_book_content(book_id: int):
     except Exception as e:
         print(f"❌ [LIBRARY] Error fetching content: {e}")
         raise HTTPException(status_code=500, detail="Failed to load book content")
+      
+
+@app.get("/library/{book_id}/pdf")
+def get_pdf_file(book_id: int):
+    """Stream the actual PDF file to the frontend."""
+    conn = sqlite3.connect("sa_study_app.db")
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("SELECT file_path, is_public FROM books WHERE id = ?", (book_id,))
+    book = cursor.fetchone()
+    conn.close()
+    
+    if not book or not book['is_public']:
+        raise HTTPException(status_code=404, detail="Book not found")
+        
+    if not os.path.exists(book['file_path']):
+        raise HTTPException(status_code=404, detail="PDF file missing on server")
+        
+    return FileResponse(book['file_path'], media_type="application/pdf")
+
+@app.get("/library/{book_id}/page/{page_num}/text")
+def get_page_text(book_id: int, page_num: int):
+    """Get the raw text for a specific page number."""
+    conn = sqlite3.connect("sa_study_app.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT text_content FROM page_texts WHERE book_id = ? AND page_num = ?", (book_id, page_num))
+    row = cursor.fetchone()
+    conn.close()
+    
+    if not row:
+        return {"text": ""}
+    return {"text": row[0]}
 if __name__ == "__main__":
     import uvicorn
     print("\n🚀 Starting SA Study App API server...")
