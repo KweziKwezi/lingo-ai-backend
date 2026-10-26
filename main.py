@@ -145,17 +145,37 @@ def remove_book(book_id: int, current_user: dict = Depends(get_current_user)):
     return {"message": "Book removed"}
 
 @app.post("/upload")
-async def upload_textbook(file: UploadFile = File(...), title: str = Form(...), grade: str = Form(...), subject: str = Form(...), type: str = Form(default="textbook"), current_user: dict = Depends(get_current_user)):
-    if not (file.filename.endswith(".pdf") or file.filename.endswith(".pptx")): raise HTTPException(status_code=400, detail="Only PDF and PPTX allowed")
+async def upload_textbook(
+    file: UploadFile = File(...),
+    title: str = Form(...),
+    grade: str = Form(...),
+    subject: str = Form(...),
+    type: str = Form(default="textbook"),
+    current_user: dict = Depends(get_current_user)
+):
+    if not (file.filename.endswith(".pdf") or file.filename.endswith(".pptx")):
+        raise HTTPException(status_code=400, detail="Only PDF and PPTX files are allowed")
+
     file_path = os.path.join(UPLOAD_DIR, file.filename)
-    with open(file_path, "wb") as buffer: shutil.copyfileobj(file.file, buffer)
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
     try:
         book_id = ingest_textbook(file_path=file_path, title=title, grade=grade, subject=subject, user_id=current_user["id"], type=type)
-        return {"message": "Uploaded!", "book_id": book_id}
+        
+        # If user uploaded a Past Paper, make it visible to everyone in the Past Papers Hub
+        if type == "past_paper":
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute("UPDATE books SET is_past_paper = 1 WHERE id = ?", (book_id,))
+            conn.commit()
+            conn.close()
+            
+        return {"message": "Uploaded!", "book_id": book_id, "title": title, "type": type}
     except Exception as e:
-        if os.path.exists(file_path): os.remove(file_path)
+        if os.path.exists(file_path):
+            os.remove(file_path)
         raise HTTPException(status_code=500, detail=str(e))
-
 @app.post("/ask", response_model=QuestionResponse)
 def ask_question(request: QuestionRequest, current_user: dict = Depends(get_current_user)):
     conv_id = request.conversation_id
