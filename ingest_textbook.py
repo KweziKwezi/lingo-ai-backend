@@ -1,4 +1,6 @@
 import os
+import sqlite3  # <--- ADDED THIS
+
 from dotenv import load_dotenv
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -107,10 +109,22 @@ def ingest_textbook(file_path: str, title: str, grade: str, subject: str,
             "chunk_index": i,
             "page": int(page_num)
         })
-        # 3.5. Save text page-by-page into SQLite for the Reader
+    
+    # 5. 💾 Save text page-by-page into SQLite for the Reader
     print("   💾 Saving page-by-page text for Reader...")
     conn = sqlite3.connect("sa_study_app.db")
     cursor = conn.cursor()
+    
+    # Ensure the table exists
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS page_texts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            book_id INTEGER NOT NULL,
+            page_num INTEGER NOT NULL,
+            text_content TEXT NOT NULL
+        )
+    """)
+    
     # Delete old page texts for this book if re-uploading
     cursor.execute("DELETE FROM page_texts WHERE book_id = ?", (book_id,))
     
@@ -122,7 +136,9 @@ def ingest_textbook(file_path: str, title: str, grade: str, subject: str,
         )
     conn.commit()
     conn.close()
-    # 5. Add to ChromaDB
+    print("   ✅ Page texts saved to database")
+
+    # 6. Add to ChromaDB
     print("   Embedding and storing in ChromaDB...")
     embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
     
