@@ -1,6 +1,9 @@
-﻿import sqlite3
+﻿import os
+import sqlite3
 
-DB_PATH = "sa_study_app.db"
+# Use /data if it exists (Render Disk), otherwise use local folder
+DATA_DIR = "/data" if os.path.exists("/data") else "."
+DB_PATH = os.path.join(DATA_DIR, "sa_study_app.db")
 
 def get_db_connection():
     conn = sqlite3.connect(DB_PATH)
@@ -11,9 +14,12 @@ def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, name TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
-    cursor.execute("CREATE TABLE IF NOT EXISTS books (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, title TEXT NOT NULL, grade TEXT NOT NULL, subject TEXT NOT NULL, filename TEXT NOT NULL, file_path TEXT NOT NULL, total_chunks INTEGER NOT NULL, type TEXT NOT NULL, uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS books (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, title TEXT NOT NULL, grade TEXT NOT NULL, subject TEXT NOT NULL, filename TEXT NOT NULL, file_path TEXT NOT NULL, total_chunks INTEGER NOT NULL, type TEXT NOT NULL, uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, is_public BOOLEAN DEFAULT 0, admin_user_id INTEGER, is_past_paper BOOLEAN DEFAULT 0, institution_type TEXT, institution_name TEXT, module_code TEXT, year INTEGER)")
     cursor.execute("CREATE TABLE IF NOT EXISTS sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, book_id INTEGER NOT NULL, title TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
     cursor.execute("CREATE TABLE IF NOT EXISTS quiz_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id INTEGER NOT NULL, questions TEXT NOT NULL, user_answers TEXT NOT NULL, results TEXT NOT NULL, score INTEGER NOT NULL, max_score INTEGER NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS conversations (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, book_id INTEGER, title TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (conversation_id) REFERENCES conversations(id))")
+    cursor.execute("CREATE TABLE IF NOT EXISTS page_texts (id INTEGER PRIMARY KEY AUTOINCREMENT, book_id INTEGER NOT NULL, page_num INTEGER NOT NULL, text_content TEXT NOT NULL)")
     conn.commit()
     conn.close()
 
@@ -115,5 +121,3 @@ def get_session_quiz_history(session_id: int):
     return [dict(row) for row in attempts]
 
 init_db()
-
-# THIS IS A FORCED CHANGE TO MAKE GIT WORK
