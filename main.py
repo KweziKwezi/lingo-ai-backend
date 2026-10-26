@@ -562,17 +562,20 @@ def get_book_content(book_id: int):
 
 @app.get("/library/{book_id}/pdf")
 def get_pdf_file(book_id: int):
+    """Stream the actual PDF file to the frontend (works for both Library and Past Papers)."""
     conn = sqlite3.connect("sa_study_app.db")
-    conn.row_factory = sqlite3.Row
+    conn.row_factory = sqlite3.Row  # <-- THIS FIXES THE TUPLE ERROR
     cursor = conn.cursor()
-    cursor.execute("SELECT file_path, is_public FROM books WHERE id = ?", (book_id,))
+    cursor.execute("SELECT file_path, is_public, is_past_paper FROM books WHERE id = ?", (book_id,))
     book = cursor.fetchone()
     conn.close()
     
-    if not book or not book['is_public']:
+    # Allow access if it's either a public book OR a past paper
+    if not book or (not book['is_public'] and not book['is_past_paper']):
         raise HTTPException(status_code=404, detail="Book not found")
     if not os.path.exists(book['file_path']):
         raise HTTPException(status_code=404, detail="PDF file missing on server")
+        
     return FileResponse(book['file_path'], media_type="application/pdf")
 
 @app.get("/library/{book_id}/page/{page_num}/text")
@@ -662,13 +665,15 @@ def get_past_papers(
 
 @app.get("/past-papers/{book_id}/download")
 def download_past_paper(book_id: int):
+    """Force download the past paper PDF."""
     conn = sqlite3.connect("sa_study_app.db")
+    conn.row_factory = sqlite3.Row  # <-- THIS FIXES THE TUPLE ERROR
     cursor = conn.cursor()
     cursor.execute("SELECT file_path, is_past_paper FROM books WHERE id = ?", (book_id,))
     book = cursor.fetchone()
     conn.close()
     
-    if not book or not book[0]:
+    if not book or not book['is_past_paper']:
         raise HTTPException(status_code=404, detail="Past paper not found")
     if not os.path.exists(book['file_path']):
         raise HTTPException(status_code=404, detail="File missing on server")
