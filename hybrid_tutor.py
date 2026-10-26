@@ -14,11 +14,15 @@ llm = ChatOpenAI(
     api_key=os.getenv("OPENAI_API_KEY")
 )
 
-# 2. Load the textbook vector database
-embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
-db = Chroma(persist_directory="./sa_textbook_db", embedding_function=embeddings)
+# 2. Load the textbook vector database from the persistent disk
+# This ensures the AI can find books even after the server restarts on Render
+DATA_DIR = "/data" if os.path.exists("/data") else "."
+CHROMA_DIR = os.path.join(DATA_DIR, "sa_textbook_db")
 
-print("✅ AI Tutor initialized!\n")
+embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+db = Chroma(persist_directory=CHROMA_DIR, embedding_function=embeddings)
+
+print(f"✅ AI Tutor initialized! (Using DB at: {CHROMA_DIR})\n")
 
 def hybrid_tutor(question, target_language, book_id=None, chapter=None):
     """
