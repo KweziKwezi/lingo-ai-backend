@@ -109,7 +109,7 @@ def extract_json_from_llm(text: str):
 # ENDPOINTS
 # ==========================================
 @app.get("/")
-def home(): return {"message": "🇦 SA Study App API v3.0", "status": "healthy"}
+def home(): return {"message": "🇿🇦 SA Study App API v3.0", "status": "healthy"}
 
 @app.post("/register", response_model=UserResponse)
 def register(user: UserRegister):
@@ -145,37 +145,21 @@ def remove_book(book_id: int, current_user: dict = Depends(get_current_user)):
     return {"message": "Book removed"}
 
 @app.post("/upload")
-async def upload_textbook(
-    file: UploadFile = File(...),
-    title: str = Form(...),
-    grade: str = Form(...),
-    subject: str = Form(...),
-    type: str = Form(default="textbook"),
-    current_user: dict = Depends(get_current_user)
-):
-    if not (file.filename.endswith(".pdf") or file.filename.endswith(".pptx")):
-        raise HTTPException(status_code=400, detail="Only PDF and PPTX files are allowed")
-
+async def upload_textbook(file: UploadFile = File(...), title: str = Form(...), grade: str = Form(...), subject: str = Form(...), type: str = Form(default="textbook"), current_user: dict = Depends(get_current_user)):
+    if not (file.filename.endswith(".pdf") or file.filename.endswith(".pptx")): raise HTTPException(status_code=400, detail="Only PDF and PPTX allowed")
     file_path = os.path.join(UPLOAD_DIR, file.filename)
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-
+    with open(file_path, "wb") as buffer: shutil.copyfileobj(file.file, buffer)
     try:
         book_id = ingest_textbook(file_path=file_path, title=title, grade=grade, subject=subject, user_id=current_user["id"], type=type)
-        
-        # If user uploaded a Past Paper, make it visible to everyone in the Past Papers Hub
         if type == "past_paper":
-            conn = sqlite3.connect(DB_PATH)
-            cursor = conn.cursor()
+            conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
             cursor.execute("UPDATE books SET is_past_paper = 1 WHERE id = ?", (book_id,))
-            conn.commit()
-            conn.close()
-            
-        return {"message": "Uploaded!", "book_id": book_id, "title": title, "type": type}
+            conn.commit(); conn.close()
+        return {"message": "Uploaded!", "book_id": book_id}
     except Exception as e:
-        if os.path.exists(file_path):
-            os.remove(file_path)
+        if os.path.exists(file_path): os.remove(file_path)
         raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/ask", response_model=QuestionResponse)
 def ask_question(request: QuestionRequest, current_user: dict = Depends(get_current_user)):
     conv_id = request.conversation_id
@@ -303,7 +287,13 @@ def get_pdf_file(book_id: int):
     book = cursor.fetchone(); conn.close()
     if not book or (not book['is_public'] and not book['is_past_paper']): raise HTTPException(status_code=404, detail="Not found")
     if not os.path.exists(book['file_path']): raise HTTPException(status_code=404, detail="File missing")
-    return FileResponse(book['file_path'], media_type="application/pdf")
+    
+    # Caching headers for faster subsequent loads
+    headers = {
+        "Cache-Control": "public, max-age=31536000, immutable",
+        "Accept-Ranges": "bytes"
+    }
+    return FileResponse(book['file_path'], media_type="application/pdf", headers=headers)
 
 @app.get("/library/{book_id}/page/{page_num}/text")
 def get_page_text(book_id: int, page_num: int):
@@ -344,7 +334,18 @@ def download_past_paper(book_id: int):
     book = cursor.fetchone(); conn.close()
     if not book or not book['is_past_paper']: raise HTTPException(status_code=404, detail="Not found")
     if not os.path.exists(book['file_path']): raise HTTPException(status_code=404, detail="File missing")
-    return FileResponse(book['file_path'], media_type="application/pdf", filename=os.path.basename(book['file_path']))
+    
+    # Caching headers for faster subsequent loads
+    headers = {
+        "Cache-Control": "public, max-age=31536000, immutable",
+        "Accept-Ranges": "bytes"
+    }
+    return FileResponse(
+        book['file_path'], 
+        media_type="application/pdf",
+        filename=os.path.basename(book['file_path']),
+        headers=headers
+    )
 
 @app.post("/translate")
 def translate_text(req: TranslationRequest, current_user: dict = Depends(get_current_user)):
