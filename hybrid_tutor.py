@@ -15,7 +15,6 @@ llm = ChatOpenAI(
 )
 
 # 2. Load the textbook vector database from the persistent disk
-# This ensures the AI can find books even after the server restarts on Render
 DATA_DIR = "/data" if os.path.exists("/data") else "."
 CHROMA_DIR = os.path.join(DATA_DIR, "sa_textbook_db")
 
@@ -27,47 +26,44 @@ print(f"✅ AI Tutor initialized! (Using DB at: {CHROMA_DIR})\n")
 def hybrid_tutor(question, target_language, book_id=None, chapter=None):
     """
     Answers student questions using a specific book's context.
-    The student can type in their local language, and the AI will reply in that language.
     """
-    print(f"🧠 Retrieving context for: '{question}' (Language: {target_language})...")
+    print(f" Retrieving context for: '{question}' (Language: {target_language})...")
+    print(f"🔍 Input book_id: {book_id} (Type: {type(book_id)})")
     
-    # Build filter using ChromaDB's required syntax ($eq and $and)
-    conditions = []
-    if book_id:
-        conditions.append({"book_id": {"$eq": str(book_id)}})
-    if chapter:
-        conditions.append({"chapter": {"$eq": chapter}})
-    
+    # Build filter using simple key-value pairs (Removes $eq to prevent silent ChromaDB failures)
     search_filter = {}
-    if len(conditions) == 1:
-        search_filter = conditions[0]
-    elif len(conditions) > 1:
-        search_filter = {"$and": conditions}
+    if book_id:
+        search_filter["book_id"] = str(book_id)
+    if chapter:
+        search_filter["chapter"] = chapter
+        
+    print(f" Applying ChromaDB filter: {search_filter}")
     
     # Retrieve relevant chunks
-    search_kwargs = {"k": 3}
+    search_kwargs = {"k": 4} # Increased from 3 to get a bit more context
     if search_filter:
         search_kwargs["filter"] = search_filter
     
     retriever = db.as_retriever(search_kwargs=search_kwargs)
     docs = retriever.invoke(question)
     
+    print(f"🔍 Found {len(docs)} documents in ChromaDB.")
+    
     # Generate answer
-    if len(docs) > 0 and len(docs[0].page_content) > 100:
+    if len(docs) > 0 and len(docs[0].page_content) > 50:
         context = "\n\n".join([doc.page_content for doc in docs])
-        book_info = docs[0].metadata.get("book_title", "the textbook")
+        book_info = docs[0].metadata.get("book_title", "the uploaded document")
         
-        prompt = f"""You are an expert South African high school tutor.
+        prompt = f"""You are an expert South African tutor.
 The student has asked you a question in {target_language}. 
-They might have typed the question in English, or they might have typed it directly in {target_language}.
 
-Answer their question using the context from "{book_info}" below.
-If the context doesn't fully answer the question, supplement with your general knowledge.
+Answer their question using ONLY the context from "{book_info}" below.
+If the context doesn't fully answer the question, use your general knowledge but mention that the specific detail wasn't in the text.
 
 CRITICAL RULE: You MUST write your ENTIRE response in {target_language}.
 Keep the tone friendly, clear, and educational.
 
-TEXTBOOK CONTEXT (in English):
+TEXTBOOK CONTEXT:
 {context}
 
 STUDENT QUESTION: {question}
@@ -76,9 +72,13 @@ ANSWER IN {target_language}:"""
         source_type = "textbook"
         
     else:
-        prompt = f"""You are an expert South African high school tutor.
-The student has asked you a question in {target_language}, but the answer is not in their textbook.
-Answer using your general knowledge.
+        # Fallback prompt if no documents are found
+        prompt = f"""You are an expert South African tutor.
+The student has asked you a question in {target_language}. 
+I could not find specific information about this in their uploaded document.
+
+Answer using your general knowledge, but start your response by politely saying: 
+"I couldn't find that specific detail in your uploaded notes, but generally speaking..."
 
 CRITICAL RULE: You MUST write your ENTIRE response in {target_language}.
 Keep the tone friendly, clear, and educational.
