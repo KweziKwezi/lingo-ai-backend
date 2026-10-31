@@ -83,7 +83,15 @@ def ingest_textbook(file_path: str, title: str, grade: str, subject: str,
     for i in range(0, len(documents), batch_size):
         batch_docs = documents[i:i + batch_size]
         texts = [d.page_content for d in batch_docs]
-        metas = [d.metadata for d in batch_docs]
+        
+        # CRITICAL FIX: Inject book_id and book_title into the metadata!
+        # This is how the AI knows which book these text chunks belong to.
+        metas = []
+        for d in batch_docs:
+            meta = d.metadata.copy()
+            meta["book_id"] = str(book_id)
+            meta["book_title"] = title
+            metas.append(meta)
         
         db.add_texts(texts=texts, metadatas=metas)
         print(f"   ✅ Embedded batch {i//batch_size + 1} of {total_batches}")
