@@ -225,7 +225,6 @@ def add_new_message(conversation_id: int, req: MessageAddRequest, current_user: 
 def delete_conv(conversation_id: int, current_user: dict = Depends(get_current_user)):
     if not delete_conversation(conversation_id, current_user["id"]): raise HTTPException(status_code=404, detail="Not found")
     return {"message": "Deleted"}
-
 @app.post("/admin/upload-library")
 async def upload_library_book(
     file: UploadFile = File(...), 
@@ -241,26 +240,14 @@ async def upload_library_book(
         if not file.filename or not (file.filename.lower().endswith(".pdf") or file.filename.lower().endswith(".pptx")):
             raise HTTPException(status_code=400, detail="Only PDF or PPTX files are allowed")
         
-        # SAFETY CHECK: Prevent OOM crashes on Render's free tier (512MB RAM limit)
-        # We read the file into memory to check size, then reset the pointer
-        file_contents = await file.read()
-        file_size_mb = len(file_contents) / (1024 * 1024)
-        
-        if file_size_mb > 15:
-            raise HTTPException(
-                status_code=413, 
-                detail=f"File is too large ({file_size_mb:.1f}MB). On the free tier, please upload files under 15MB to prevent server memory crashes. Consider splitting the PDF into Part 1, Part 2, etc."
-            )
-        
-        # Reset file pointer so we can save it
-        import io
-        file.file = io.BytesIO(file_contents)
-        
+        # CRITICAL FIX: Stream directly to disk to prevent loading 100MB into RAM
         os.makedirs(UPLOAD_DIR, exist_ok=True)
         file_path = os.path.join(UPLOAD_DIR, file.filename)
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
             
+        print(f"💾 [UPLOAD] File saved to disk. Starting AI processing...")
+        
         book_id = ingest_textbook(file_path=file_path, title=title, grade=grade, subject=subject, user_id=current_user["id"], type=type)
         
         conn = sqlite3.connect(DB_PATH)
