@@ -250,18 +250,29 @@ def get_public_library():
 @app.delete("/admin/library/{book_id}")
 def delete_library_book(book_id: int, current_user: dict = Depends(get_current_admin)):
     conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
-    cursor.execute("SELECT file_path FROM books WHERE id = ? AND is_public = 1", (book_id,))
+    
+    # UPDATED: Allow deleting items that are EITHER public textbooks OR past papers
+    cursor.execute("SELECT file_path FROM books WHERE id = ? AND (is_public = 1 OR is_past_paper = 1)", (book_id,))
     book = cursor.fetchone()
-    if not book: conn.close(); raise HTTPException(status_code=404, detail="Not found")
+    
+    if not book: 
+        conn.close()
+        raise HTTPException(status_code=404, detail="Not found")
+        
     file_path = book[0]
     try:
         db = Chroma(persist_directory=CHROMA_DIR, embedding_function=OpenAIEmbeddings(model="text-embedding-3-small"))
         db._collection.delete(where={"book_id": str(book_id)})
-    except Exception as e: print(f"⚠️ Chroma delete warning: {e}")
+    except Exception as e: 
+        print(f"⚠️ Chroma delete warning: {e}")
+        
     cursor.execute("DELETE FROM page_texts WHERE book_id = ?", (book_id,))
     cursor.execute("DELETE FROM books WHERE id = ?", (book_id,))
     conn.commit(); conn.close()
-    if os.path.exists(file_path): os.remove(file_path)
+    
+    if os.path.exists(file_path): 
+        os.remove(file_path)
+        
     return {"message": "Deleted"}
 
 @app.get("/library/{book_id}/content")
