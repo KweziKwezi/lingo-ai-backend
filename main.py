@@ -3,6 +3,7 @@ import shutil
 import json
 import re
 import sqlite3
+import traceback
 from typing import Optional, List
 from fastapi.responses import FileResponse
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, status
@@ -59,7 +60,7 @@ def get_current_admin(current_user: dict = Depends(get_current_user)):
     return current_user
 
 if not os.path.exists(UPLOAD_DIR):
-    os.makedirs(UPLOAD_DIR)
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 app = FastAPI(title="SA Study App API", description="AI tutor for South African students", version="3.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
@@ -235,51 +236,35 @@ async def upload_library_book(
     current_user: dict = Depends(get_current_admin)
 ):
     try:
-        # 1. Validate file
+        print(f"🚀 [UPLOAD] Starting upload for: {title}")
         if not file.filename or not (file.filename.lower().endswith(".pdf") or file.filename.lower().endswith(".pptx")):
             raise HTTPException(status_code=400, detail="Only PDF or PPTX files are allowed")
         
-        # 2. Ensure upload directory exists (prevents Permission/File Not Found errors)
         os.makedirs(UPLOAD_DIR, exist_ok=True)
-        
-        # 3. Save file
         file_path = os.path.join(UPLOAD_DIR, file.filename)
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
             
-        # 4. Ingest into database and vector store
-        book_id = ingest_textbook(
-            file_path=file_path, 
-            title=title, 
-            grade=grade, 
-            subject=subject, 
-            user_id=current_user["id"], 
-            type=type
-        )
+        book_id = ingest_textbook(file_path=file_path, title=title, grade=grade, subject=subject, user_id=current_user["id"], type=type)
         
-        # 5. Mark as public
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute("UPDATE books SET is_public = 1, admin_user_id = ? WHERE id = ?", (current_user["id"], book_id))
         conn.commit()
         conn.close()
         
+        print(f"✅ [UPLOAD] Success! Book ID: {book_id}")
         return {"message": "Added to Library!", "book_id": book_id}
         
     except HTTPException:
-        raise # Re-raise known HTTP errors (like 400 or 403)
+        raise
     except Exception as e:
-        # Log the exact error to Render logs so we can see it
-        print(f"❌ CRITICAL UPLOAD ERROR: {str(e)}")
-        import traceback
+        print(f"❌❌❌ [UPLOAD] CRITICAL ERROR: {str(e)}")
         traceback.print_exc()
-        
-        # Clean up the file if it was partially saved
         if 'file_path' in locals() and os.path.exists(file_path):
             os.remove(file_path)
-            
-        # Return a proper 500 error WITH CORS headers
         raise HTTPException(status_code=500, detail=f"Server error during upload: {str(e)}")
+
 @app.get("/library")
 def get_public_library():
     conn = sqlite3.connect(DB_PATH); conn.row_factory = sqlite3.Row; cursor = conn.cursor()
@@ -290,29 +275,22 @@ def get_public_library():
 @app.delete("/admin/library/{book_id}")
 def delete_library_book(book_id: int, current_user: dict = Depends(get_current_admin)):
     conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
-    
-    # UPDATED: Allow deleting items that are EITHER public textbooks OR past papers
     cursor.execute("SELECT file_path FROM books WHERE id = ? AND (is_public = 1 OR is_past_paper = 1)", (book_id,))
     book = cursor.fetchone()
-    
     if not book: 
         conn.close()
         raise HTTPException(status_code=404, detail="Not found")
-        
     file_path = book[0]
     try:
         db = Chroma(persist_directory=CHROMA_DIR, embedding_function=OpenAIEmbeddings(model="text-embedding-3-small"))
         db._collection.delete(where={"book_id": str(book_id)})
     except Exception as e: 
         print(f"⚠️ Chroma delete warning: {e}")
-        
     cursor.execute("DELETE FROM page_texts WHERE book_id = ?", (book_id,))
     cursor.execute("DELETE FROM books WHERE id = ?", (book_id,))
     conn.commit(); conn.close()
-    
     if os.path.exists(file_path): 
         os.remove(file_path)
-        
     return {"message": "Deleted"}
 
 @app.get("/library/{book_id}/content")
@@ -338,12 +316,7 @@ def get_pdf_file(book_id: int):
     book = cursor.fetchone(); conn.close()
     if not book or (not book['is_public'] and not book['is_past_paper']): raise HTTPException(status_code=404, detail="Not found")
     if not os.path.exists(book['file_path']): raise HTTPException(status_code=404, detail="File missing")
-    
-    # Caching headers for faster subsequent loads
-    headers = {
-        "Cache-Control": "public, max-age=31536000, immutable",
-        "Accept-Ranges": "bytes"
-    }
+    headers = {"Cache-Control": "public, max-age=31536000, immutable", "Accept-Ranges": "bytes"}
     return FileResponse(book['file_path'], media_type="application/pdf", headers=headers)
 
 @app.get("/library/{book_id}/page/{page_num}/text")
@@ -353,23 +326,6 @@ def get_page_text(book_id: int, page_num: int):
     cursor = conn.cursor()
     cursor.execute("SELECT text_content FROM page_texts WHERE book_id = ? AND page_num = ?", (book_id, page_num))
     row = cursor.fetchone()
-    conn.close()
-    
-    if row and row[0]:
-        return {"text": row[0]}
-    return {"text": ""}
-    
-    # If not found or empty, search nearby pages (±3)
-    if not row or not row[0] or len(row[0].strip()) < 10:
-        for offset in [1, -1, 2, -2, 3, -3]:
-            try_page = page_num + offset
-            if try_page > 0:
-                cursor.execute("SELECT text_content FROM page_texts WHERE book_id = ? AND page_num = ?", (book_id, try_page))
-                nearby = cursor.fetchone()
-                if nearby and nearby[0] and len(nearby[0].strip()) > 10:
-                    row = nearby
-                    break
-    
     conn.close()
     
     if row and row[0]:
@@ -408,18 +364,8 @@ def download_past_paper(book_id: int):
     book = cursor.fetchone(); conn.close()
     if not book or not book['is_past_paper']: raise HTTPException(status_code=404, detail="Not found")
     if not os.path.exists(book['file_path']): raise HTTPException(status_code=404, detail="File missing")
-    
-    # Caching headers for faster subsequent loads
-    headers = {
-        "Cache-Control": "public, max-age=31536000, immutable",
-        "Accept-Ranges": "bytes"
-    }
-    return FileResponse(
-        book['file_path'], 
-        media_type="application/pdf",
-        filename=os.path.basename(book['file_path']),
-        headers=headers
-    )
+    headers = {"Cache-Control": "public, max-age=31536000, immutable", "Accept-Ranges": "bytes"}
+    return FileResponse(book['file_path'], media_type="application/pdf", filename=os.path.basename(book['file_path']), headers=headers)
 
 @app.post("/translate")
 def translate_text(req: TranslationRequest, current_user: dict = Depends(get_current_user)):
