@@ -226,20 +226,60 @@ def delete_conv(conversation_id: int, current_user: dict = Depends(get_current_u
     return {"message": "Deleted"}
 
 @app.post("/admin/upload-library")
-async def upload_library_book(file: UploadFile = File(...), title: str = Form(...), grade: str = Form(...), subject: str = Form(...), type: str = Form(default="textbook"), current_user: dict = Depends(get_current_admin)):
-    if not (file.filename.endswith(".pdf") or file.filename.endswith(".pptx")): raise HTTPException(status_code=400, detail="Only PDF/PPTX")
-    file_path = os.path.join(UPLOAD_DIR, file.filename)
-    with open(file_path, "wb") as buffer: shutil.copyfileobj(file.file, buffer)
+async def upload_library_book(
+    file: UploadFile = File(...), 
+    title: str = Form(...), 
+    grade: str = Form(...), 
+    subject: str = Form(...), 
+    type: str = Form(default="textbook"), 
+    current_user: dict = Depends(get_current_admin)
+):
     try:
-        book_id = ingest_textbook(file_path=file_path, title=title, grade=grade, subject=subject, user_id=current_user["id"], type=type)
-        conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
+        # 1. Validate file
+        if not file.filename or not (file.filename.lower().endswith(".pdf") or file.filename.lower().endswith(".pptx")):
+            raise HTTPException(status_code=400, detail="Only PDF or PPTX files are allowed")
+        
+        # 2. Ensure upload directory exists (prevents Permission/File Not Found errors)
+        os.makedirs(UPLOAD_DIR, exist_ok=True)
+        
+        # 3. Save file
+        file_path = os.path.join(UPLOAD_DIR, file.filename)
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+            
+        # 4. Ingest into database and vector store
+        book_id = ingest_textbook(
+            file_path=file_path, 
+            title=title, 
+            grade=grade, 
+            subject=subject, 
+            user_id=current_user["id"], 
+            type=type
+        )
+        
+        # 5. Mark as public
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
         cursor.execute("UPDATE books SET is_public = 1, admin_user_id = ? WHERE id = ?", (current_user["id"], book_id))
-        conn.commit(); conn.close()
+        conn.commit()
+        conn.close()
+        
         return {"message": "Added to Library!", "book_id": book_id}
+        
+    except HTTPException:
+        raise # Re-raise known HTTP errors (like 400 or 403)
     except Exception as e:
-        if os.path.exists(file_path): os.remove(file_path)
-        raise HTTPException(status_code=500, detail=str(e))
-
+        # Log the exact error to Render logs so we can see it
+        print(f"❌ CRITICAL UPLOAD ERROR: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        
+        # Clean up the file if it was partially saved
+        if 'file_path' in locals() and os.path.exists(file_path):
+            os.remove(file_path)
+            
+        # Return a proper 500 error WITH CORS headers
+        raise HTTPException(status_code=500, detail=f"Server error during upload: {str(e)}")
 @app.get("/library")
 def get_public_library():
     conn = sqlite3.connect(DB_PATH); conn.row_factory = sqlite3.Row; cursor = conn.cursor()
