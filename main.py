@@ -297,10 +297,33 @@ def get_pdf_file(book_id: int):
 
 @app.get("/library/{book_id}/page/{page_num}/text")
 def get_page_text(book_id: int, page_num: int):
-    conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
+    """Get the raw text for the EXACT page number."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
     cursor.execute("SELECT text_content FROM page_texts WHERE book_id = ? AND page_num = ?", (book_id, page_num))
-    row = cursor.fetchone(); conn.close()
-    return {"text": row[0]} if row else {"text": ""}
+    row = cursor.fetchone()
+    conn.close()
+    
+    if row and row[0]:
+        return {"text": row[0]}
+    return {"text": ""}
+    
+    # If not found or empty, search nearby pages (±3)
+    if not row or not row[0] or len(row[0].strip()) < 10:
+        for offset in [1, -1, 2, -2, 3, -3]:
+            try_page = page_num + offset
+            if try_page > 0:
+                cursor.execute("SELECT text_content FROM page_texts WHERE book_id = ? AND page_num = ?", (book_id, try_page))
+                nearby = cursor.fetchone()
+                if nearby and nearby[0] and len(nearby[0].strip()) > 10:
+                    row = nearby
+                    break
+    
+    conn.close()
+    
+    if row and row[0]:
+        return {"text": row[0]}
+    return {"text": ""}
 
 @app.post("/admin/upload-past-paper")
 async def upload_past_paper(file: UploadFile = File(...), institution_type: str = Form(...), institution_name: str = Form(...), subject_or_module: str = Form(...), module_code: str = Form(default=""), year: int = Form(...), current_user: dict = Depends(get_current_admin)):

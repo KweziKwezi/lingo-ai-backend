@@ -66,15 +66,27 @@ def ingest_textbook(file_path: str, title: str, grade: str, subject: str,
             "chunk_index": i, "page": int(page_num)
         })
     
-    # Save page-by-page text to SQLite
+        # 5. 💾 Save text page-by-page into SQLite for the Reader
     print("   💾 Saving page-by-page text for Reader...")
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
+    
     cursor.execute("""CREATE TABLE IF NOT EXISTS page_texts (id INTEGER PRIMARY KEY AUTOINCREMENT, book_id INTEGER NOT NULL, page_num INTEGER NOT NULL, text_content TEXT NOT NULL)""")
     cursor.execute("DELETE FROM page_texts WHERE book_id = ?", (book_id,))
+    
     for doc in documents:
-        page_num = doc.metadata.get("page", 1)
-        cursor.execute("INSERT INTO page_texts (book_id, page_num, text_content) VALUES (?, ?, ?)", (book_id, int(page_num), doc.page_content))
+        raw_page = doc.metadata.get("page", 1)
+        is_slide = doc.metadata.get("type") == "slide"
+        
+        # PyPDFLoader returns 0-indexed pages (0, 1, 2...). 
+        # PDF viewers use 1-indexed pages (1, 2, 3...).
+        # We manually set PPTX slides to 1-indexed, so we don't add 1 for them.
+        page_num = raw_page + 1 if not is_slide else raw_page
+        
+        cursor.execute(
+            "INSERT INTO page_texts (book_id, page_num, text_content) VALUES (?, ?, ?)",
+            (book_id, int(page_num), doc.page_content)
+        )
     conn.commit()
     conn.close()
     print("   ✅ Page texts saved to database")
