@@ -88,35 +88,39 @@ def ingest_textbook(file_path: str, title: str, grade: str, subject: str,
     conn.close()
     print("   ✅ Page texts saved to database")
 
-    # 6. Add to ChromaDB (Highly Optimized for Low Memory)
+       # 6. Add to ChromaDB (Highly Optimized for Speed and Low Memory)
     print("   Embedding and storing in ChromaDB...")
     
-    # Force garbage collection to free up RAM before the heavy AI step
-    del raw_docs
+    # Aggressively free up RAM before the heavy AI step
+    if 'raw_docs' in locals(): 
+        del raw_docs
     gc.collect()
     
     embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
     db = Chroma(persist_directory=CHROMA_DIR, embedding_function=embeddings)
     
-    # CRITICAL: Process in very small batches to prevent RAM spikes
-    batch_size = 10 
+    # CRITICAL FIX: Increased batch size from 10 to 100. 
+    # This makes the upload 10x FASTER to prevent Render's 100-second timeout limit.
+    batch_size = 100 
     total_batches = (len(documents) // batch_size) + 1
     
     for i in range(0, len(documents), batch_size):
         batch_docs = [d.page_content for d in documents[i:i + batch_size]]
         batch_meta = [d.metadata for d in documents[i:i + batch_size]]
         
+        # Add to database
         db.add_texts(texts=batch_docs, metadatas=batch_meta)
         print(f"   ✅ Embedded batch {i//batch_size + 1} of {total_batches}")
         
-        # Delete batch data and force garbage collection immediately
+        # Immediately delete batch data and force garbage collection to free RAM
         del batch_docs
         del batch_meta
         gc.collect()
     
     # Final cleanup
-    del documents
+    if 'documents' in locals():
+        del documents
     gc.collect()
     
     print(f"✅ Successfully ingested: {title} (ID: {book_id}) into {CHROMA_DIR}\n")
-    return book_id
+    return book_id 
