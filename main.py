@@ -237,8 +237,24 @@ async def upload_library_book(
 ):
     try:
         print(f"🚀 [UPLOAD] Starting upload for: {title}")
+        
         if not file.filename or not (file.filename.lower().endswith(".pdf") or file.filename.lower().endswith(".pptx")):
             raise HTTPException(status_code=400, detail="Only PDF or PPTX files are allowed")
+        
+        # SAFETY CHECK: Prevent OOM crashes on Render's free tier (512MB RAM limit)
+        # We read the file into memory to check size, then reset the pointer
+        file_contents = await file.read()
+        file_size_mb = len(file_contents) / (1024 * 1024)
+        
+        if file_size_mb > 15:
+            raise HTTPException(
+                status_code=413, 
+                detail=f"File is too large ({file_size_mb:.1f}MB). On the free tier, please upload files under 15MB to prevent server memory crashes. Consider splitting the PDF into Part 1, Part 2, etc."
+            )
+        
+        # Reset file pointer so we can save it
+        import io
+        file.file = io.BytesIO(file_contents)
         
         os.makedirs(UPLOAD_DIR, exist_ok=True)
         file_path = os.path.join(UPLOAD_DIR, file.filename)
@@ -260,11 +276,11 @@ async def upload_library_book(
         raise
     except Exception as e:
         print(f"❌❌❌ [UPLOAD] CRITICAL ERROR: {str(e)}")
+        import traceback
         traceback.print_exc()
         if 'file_path' in locals() and os.path.exists(file_path):
             os.remove(file_path)
         raise HTTPException(status_code=500, detail=f"Server error during upload: {str(e)}")
-
 @app.get("/library")
 def get_public_library():
     conn = sqlite3.connect(DB_PATH); conn.row_factory = sqlite3.Row; cursor = conn.cursor()

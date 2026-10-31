@@ -1,4 +1,5 @@
 import os
+import gc
 import sqlite3
 from dotenv import load_dotenv
 from langchain_community.document_loaders import PyPDFLoader
@@ -91,11 +92,25 @@ def ingest_textbook(file_path: str, title: str, grade: str, subject: str,
     conn.close()
     print("   ✅ Page texts saved to database")
 
-    # Add to ChromaDB
+   # 6. Add to ChromaDB
     print("   Embedding and storing in ChromaDB...")
+    
+    # CRITICAL FIX: Force garbage collection to free up RAM before the heavy AI embedding step
+    # This deletes the raw PDF data from memory to prevent Render's 512MB OOM limit from crashing
+    del raw_docs
+    del documents
+    gc.collect()
+    
     embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
     db = Chroma(persist_directory=CHROMA_DIR, embedding_function=embeddings)
-    db.add_texts(texts=final_documents, metadatas=final_metadatas)
+    
+    # Process in smaller batches to prevent memory spikes
+    batch_size = 50
+    for i in range(0, len(final_documents), batch_size):
+        batch_docs = final_documents[i:i + batch_size]
+        batch_meta = final_metadatas[i:i + batch_size]
+        db.add_texts(texts=batch_docs, metadatas=batch_meta)
+        print(f"   ✅ Embedded batch {i//batch_size + 1}")
     
     print(f"✅ Successfully ingested: {title} (ID: {book_id}) into {CHROMA_DIR}\n")
     return book_id
